@@ -41,16 +41,16 @@ mcp_kwargs: dict[str, Any] = {
     "transport_security": TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=[
-            "zenbizodoo-production.up.railway.app",
-            "zenbizodoo-production.up.railway.app:*",
+            "peltierpro-mcp-production.up.railway.app",
+            "peltierpro-mcp-production.up.railway.app:*",
             "localhost",
             "localhost:*",
             "127.0.0.1",
             "127.0.0.1:*",
         ],
         allowed_origins=[
-            "https://zenbizodoo-production.up.railway.app",
-            "https://zenbizodoo-production.up.railway.app:*",
+            "https://peltierpro-mcp-production.up.railway.app",
+            "https://peltierpro-mcp-production.up.railway.app:*",
             "http://localhost:*",
             "http://127.0.0.1:*",
         ],
