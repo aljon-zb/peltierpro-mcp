@@ -7,6 +7,7 @@ from mcp.server.auth.settings import AuthSettings
 from pydantic import AnyHttpUrl
 
 from app.audit import log_tool
+from app.branding import branded_response
 from app.config import Settings
 from app.odoo_client import OdooAPIError, OdooClient
 from app.oauth import JWKSJWTTokenVerifier
@@ -80,7 +81,7 @@ if settings.auth_enabled:
 
 
 mcp = FastMCP(
-    "Claude Odoo OAuth Read-Only",
+    "ZenBiz PeltierPro Odoo MCP",
     **mcp_kwargs,
 )
 
@@ -133,10 +134,12 @@ def failed(
         error=str(exc),
     )
 
-    return {
-        "success": False,
-        "error": str(exc),
-    }
+    return branded_response(
+        {
+            "success": False,
+            "error": str(exc),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -165,10 +168,12 @@ async def test_odoo_connection():
 
         log_tool(tool)
 
-        return {
-            "success": True,
-            "message": "Odoo authentication succeeded.",
-        }
+        return branded_response(
+            {
+                "success": True,
+                "message": "Odoo authentication succeeded.",
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -262,11 +267,13 @@ async def search_users(
             len(rows),
         )
 
-        return {
-            "success": True,
-            "count": len(rows),
-            "users": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "count": len(rows),
+                "users": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -450,13 +457,15 @@ async def search_user_projects_tasks(
             len(tasks),
         )
 
-        return {
-            "success": True,
-            "count": len(projects),
-            "task_count": len(tasks),
-            "matched_users": users,
-            "projects": projects,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "count": len(projects),
+                "task_count": len(tasks),
+                "matched_users": users,
+                "projects": projects,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -540,11 +549,13 @@ async def search_crm_opportunities(
             len(rows),
         )
 
-        return {
-            "success": True,
-            "count": len(rows),
-            "opportunities": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "count": len(rows),
+                "opportunities": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -611,10 +622,12 @@ async def get_crm_opportunity(
             1,
         )
 
-        return {
-            "success": True,
-            "opportunity": rows[0],
-        }
+        return branded_response(
+            {
+                "success": True,
+                "opportunity": rows[0],
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -683,12 +696,14 @@ async def get_crm_pipeline_summary(
 
         log_tool(tool, params, len(rows))
 
-        return {
-            "success": True,
-            "count": len(rows),
-            "stages": list(by_stage.values()),
-            "opportunities": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "count": len(rows),
+                "stages": list(by_stage.values()),
+                "opportunities": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(tool, exc, params)
@@ -757,13 +772,15 @@ async def get_crm_opportunities_closing_soon(
 
         log_tool(tool, params, len(opportunities))
 
-        return {
-            "success": True,
-            "as_of_date": today.isoformat(),
-            "within_days": within_days,
-            "count": len(opportunities),
-            "opportunities": opportunities,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "as_of_date": today.isoformat(),
+                "within_days": within_days,
+                "count": len(opportunities),
+                "opportunities": opportunities,
+            }
+        )
 
     except Exception as exc:
         return failed(tool, exc, params)
@@ -818,12 +835,14 @@ async def get_stale_crm_opportunities(
 
         log_tool(tool, params, len(rows))
 
-        return {
-            "success": True,
-            "inactive_days": inactive_days,
-            "count": len(rows),
-            "opportunities": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "inactive_days": inactive_days,
+                "count": len(rows),
+                "opportunities": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(tool, exc, params)
@@ -903,12 +922,14 @@ async def get_crm_salesperson_pipeline(
 
         log_tool(tool, params, len(rows))
 
-        return {
-            "success": True,
-            "count": len(rows),
-            "matched_users": users,
-            "opportunities": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "count": len(rows),
+                "matched_users": users,
+                "opportunities": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(tool, exc, params)
@@ -1004,11 +1025,13 @@ async def search_sales_orders(
             len(rows),
         )
 
-        return {
-            "success": True,
-            "count": len(rows),
-            "sales_orders": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "count": len(rows),
+                "sales_orders": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -1100,11 +1123,13 @@ async def get_sales_order(
             1 + len(lines),
         )
 
-        return {
-            "success": True,
-            "order": order,
-            "lines": lines,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "order": order,
+                "lines": lines,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -1240,14 +1265,16 @@ async def get_sales_summary(
             len(rows),
         )
 
-        return {
-            "success": True,
-            "date_from": params["date_from"] or None,
-            "date_to": params["date_to"] or None,
-            "count": len(rows),
-            "currency_summaries": currency_summaries,
-            "sales_orders": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "date_from": params["date_from"] or None,
+                "date_to": params["date_to"] or None,
+                "count": len(rows),
+                "currency_summaries": currency_summaries,
+                "sales_orders": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -1377,13 +1404,15 @@ async def get_top_customers(
             len(rows),
         )
 
-        return {
-            "success": True,
-            "date_from": params["date_from"] or None,
-            "date_to": params["date_to"] or None,
-            "count": len(ranked),
-            "customers": ranked,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "date_from": params["date_from"] or None,
+                "date_to": params["date_to"] or None,
+                "count": len(ranked),
+                "customers": ranked,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -1513,13 +1542,15 @@ async def get_salesperson_performance(
             len(rows),
         )
 
-        return {
-            "success": True,
-            "date_from": params["date_from"] or None,
-            "date_to": params["date_to"] or None,
-            "count": len(ranked),
-            "salespeople": ranked,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "date_from": params["date_from"] or None,
+                "date_to": params["date_to"] or None,
+                "count": len(ranked),
+                "salespeople": ranked,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -1602,11 +1633,13 @@ async def get_uninvoiced_sales_orders(
             len(rows),
         )
 
-        return {
-            "success": True,
-            "count": len(rows),
-            "sales_orders": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "count": len(rows),
+                "sales_orders": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -1720,13 +1753,15 @@ async def get_expiring_quotations(
             len(quotations),
         )
 
-        return {
-            "success": True,
-            "as_of_date": today.isoformat(),
-            "within_days": within_days,
-            "count": len(quotations),
-            "quotations": quotations,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "as_of_date": today.isoformat(),
+                "within_days": within_days,
+                "count": len(quotations),
+                "quotations": quotations,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -1909,19 +1944,21 @@ async def search_customer_invoices_due(
             len(invoices),
         )
 
-        return {
-            "success": True,
-            "report": params["due_status"],
-            "as_of_date": today_text,
-            "due_within_days": (
-                due_within_days
-                if params["due_status"] == "almost_due"
-                else None
-            ),
-            "count": len(invoices),
-            "total_residual": total_residual,
-            "invoices": invoices,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "report": params["due_status"],
+                "as_of_date": today_text,
+                "due_within_days": (
+                    due_within_days
+                    if params["due_status"] == "almost_due"
+                    else None
+                ),
+                "count": len(invoices),
+                "total_residual": total_residual,
+                "invoices": invoices,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -2083,15 +2120,17 @@ async def get_aged_receivables(
             len(invoices),
         )
 
-        return {
-            "success": True,
-            "as_of_date": today.isoformat(),
-            "count": len(invoices),
-            "aging_by_currency": list(
-                aging_by_currency.values()
-            ),
-            "invoices": invoices,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "as_of_date": today.isoformat(),
+                "count": len(invoices),
+                "aging_by_currency": list(
+                    aging_by_currency.values()
+                ),
+                "invoices": invoices,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -2252,15 +2291,17 @@ async def get_aged_payables(
             len(bills),
         )
 
-        return {
-            "success": True,
-            "as_of_date": today.isoformat(),
-            "count": len(bills),
-            "aging_by_currency": list(
-                aging_by_currency.values()
-            ),
-            "vendor_bills": bills,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "as_of_date": today.isoformat(),
+                "count": len(bills),
+                "aging_by_currency": list(
+                    aging_by_currency.values()
+                ),
+                "vendor_bills": bills,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -2355,15 +2396,17 @@ async def get_customer_outstanding_balance(
             len(rows),
         )
 
-        return {
-            "success": True,
-            "search": params["search"],
-            "count": len(rows),
-            "balances_by_currency": list(
-                balances.values()
-            ),
-            "invoices": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "search": params["search"],
+                "count": len(rows),
+                "balances_by_currency": list(
+                    balances.values()
+                ),
+                "invoices": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -2458,15 +2501,17 @@ async def get_vendor_outstanding_balance(
             len(rows),
         )
 
-        return {
-            "success": True,
-            "search": params["search"],
-            "count": len(rows),
-            "balances_by_currency": list(
-                balances.values()
-            ),
-            "vendor_bills": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "search": params["search"],
+                "count": len(rows),
+                "balances_by_currency": list(
+                    balances.values()
+                ),
+                "vendor_bills": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -2563,11 +2608,13 @@ async def search_products(
             len(rows),
         )
 
-        return {
-            "success": True,
-            "count": len(rows),
-            "products": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "count": len(rows),
+                "products": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -2642,11 +2689,13 @@ async def get_stock_by_location(
             len(rows),
         )
 
-        return {
-            "success": True,
-            "count": len(rows),
-            "stock_quants": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "count": len(rows),
+                "stock_quants": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -2741,11 +2790,13 @@ async def search_inventory_transfers(
             len(rows),
         )
 
-        return {
-            "success": True,
-            "count": len(rows),
-            "transfers": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "count": len(rows),
+                "transfers": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -2820,12 +2871,14 @@ async def get_low_stock_products(
             len(products),
         )
 
-        return {
-            "success": True,
-            "threshold": threshold,
-            "count": len(products),
-            "products": products,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "threshold": threshold,
+                "count": len(products),
+                "products": products,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -2897,11 +2950,13 @@ async def get_out_of_stock_products(
             len(products),
         )
 
-        return {
-            "success": True,
-            "count": len(products),
-            "products": products,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "count": len(products),
+                "products": products,
+            }
+        )
 
     except Exception as exc:
         return failed(
@@ -2954,13 +3009,15 @@ async def get_inventory_stock_summary(
 
         log_tool(tool, params, len(rows))
 
-        return {
-            "success": True,
-            "count": len(rows),
-            "total_on_hand_quantity": total_on_hand,
-            "total_forecast_quantity": total_forecast,
-            "products": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "count": len(rows),
+                "total_on_hand_quantity": total_on_hand,
+                "total_forecast_quantity": total_forecast,
+                "products": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(tool, exc, params)
@@ -3008,12 +3065,14 @@ async def get_late_inventory_transfers(
 
         log_tool(tool, params, len(rows))
 
-        return {
-            "success": True,
-            "as_of_date": today_text,
-            "count": len(rows),
-            "transfers": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "as_of_date": today_text,
+                "count": len(rows),
+                "transfers": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(tool, exc, params)
@@ -3056,11 +3115,13 @@ async def get_pending_receipts(
 
         log_tool(tool, params, len(rows))
 
-        return {
-            "success": True,
-            "count": len(rows),
-            "receipts": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "count": len(rows),
+                "receipts": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(tool, exc, params)
@@ -3103,11 +3164,13 @@ async def get_pending_deliveries(
 
         log_tool(tool, params, len(rows))
 
-        return {
-            "success": True,
-            "count": len(rows),
-            "deliveries": rows,
-        }
+        return branded_response(
+            {
+                "success": True,
+                "count": len(rows),
+                "deliveries": rows,
+            }
+        )
 
     except Exception as exc:
         return failed(tool, exc, params)
