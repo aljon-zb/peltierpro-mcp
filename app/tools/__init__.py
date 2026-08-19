@@ -1,0 +1,7 @@
+from .connection import register_connection_tools
+from .users import register_users_tools
+from .projects import register_projects_tools
+from .crm import register_crm_tools
+from .sales import register_sales_tools
+from .accounting import register_accounting_tools
+from .inventory import register_inventory_tools
