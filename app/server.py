@@ -1,4 +1,5 @@
 import logging
+from datetime import date, timedelta
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -805,6 +806,194 @@ async def get_sales_order(
             "success": True,
             "order": order,
             "lines": lines,
+        }
+
+    except Exception as exc:
+        return failed(
+            tool,
+            exc,
+            params,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Accounting / Invoice Reporting
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def search_customer_invoices_due(
+    due_status: str = "overdue",
+    due_within_days: int = 7,
+    search: str = "",
+    limit: int = 20,
+):
+    """
+    Report posted customer invoices that are overdue or almost due.
+
+    Read-only.
+
+    Parameters:
+    - due_status: "overdue" or "almost_due"
+    - due_within_days: for almost_due, include invoices due from today
+      through this many days ahead
+    - search: optional customer name or invoice number/reference
+    - limit: maximum number of invoice records to return
+    """
+
+    tool = "search_customer_invoices_due"
+
+    params = {
+        "due_status": clean_search(due_status).lower(),
+        "due_within_days": due_within_days,
+        "search": clean_search(search),
+        "limit": limit,
+    }
+
+    try:
+        if params["due_status"] not in {
+            "overdue",
+            "almost_due",
+        }:
+            raise ValueError(
+                'due_status must be "overdue" or "almost_due".'
+            )
+
+        if due_within_days < 0:
+            raise ValueError(
+                "due_within_days must be 0 or greater."
+            )
+
+        safe_limit = clamp_limit(
+            limit,
+            settings.max_results,
+        )
+
+        today = date.today()
+        today_text = today.isoformat()
+
+        domain: list[Any] = [
+            ["move_type", "=", "out_invoice"],
+            ["state", "=", "posted"],
+            ["payment_state", "not in", ["paid", "reversed"]],
+            ["amount_residual", ">", 0],
+            ["invoice_date_due", "!=", False],
+        ]
+
+        if params["due_status"] == "overdue":
+            domain.append(
+                ["invoice_date_due", "<", today_text]
+            )
+        else:
+            due_until = (
+                today + timedelta(days=due_within_days)
+            ).isoformat()
+
+            domain.extend(
+                [
+                    ["invoice_date_due", ">=", today_text],
+                    ["invoice_date_due", "<=", due_until],
+                ]
+            )
+
+        if params["search"]:
+            domain.extend(
+                [
+                    "|",
+                    "|",
+                    [
+                        "name",
+                        "ilike",
+                        params["search"],
+                    ],
+                    [
+                        "ref",
+                        "ilike",
+                        params["search"],
+                    ],
+                    [
+                        "partner_id",
+                        "ilike",
+                        params["search"],
+                    ],
+                ]
+            )
+
+        rows = await odoo.search_read(
+            model="account.move",
+            domain=domain,
+            fields=[
+                "id",
+                "name",
+                "ref",
+                "partner_id",
+                "invoice_date",
+                "invoice_date_due",
+                "currency_id",
+                "amount_untaxed",
+                "amount_tax",
+                "amount_total",
+                "amount_residual",
+                "payment_state",
+                "invoice_payment_term_id",
+                "company_id",
+            ],
+            limit=safe_limit,
+            order="invoice_date_due asc, id asc",
+        )
+
+        invoices = []
+
+        for row in rows:
+            due_date_value = row.get("invoice_date_due")
+            days_difference = None
+
+            if due_date_value:
+                due_date = date.fromisoformat(
+                    due_date_value
+                )
+                days_difference = (
+                    due_date - today
+                ).days
+
+            invoice = dict(row)
+            invoice["due_status"] = params["due_status"]
+
+            if params["due_status"] == "overdue":
+                invoice["days_overdue"] = (
+                    abs(days_difference)
+                    if days_difference is not None
+                    else None
+                )
+            else:
+                invoice["days_until_due"] = (
+                    days_difference
+                )
+
+            invoices.append(invoice)
+
+        total_residual = sum(
+            float(invoice.get("amount_residual") or 0)
+            for invoice in invoices
+        )
+
+        log_tool(
+            tool,
+            params,
+            len(invoices),
+        )
+
+        return {
+            "success": True,
+            "report": params["due_status"],
+            "as_of_date": today_text,
+            "due_within_days": (
+                due_within_days
+                if params["due_status"] == "almost_due"
+                else None
+            ),
+            "count": len(invoices),
+            "total_residual": total_residual,
+            "invoices": invoices,
         }
 
     except Exception as exc:
