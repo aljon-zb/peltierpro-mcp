@@ -469,6 +469,14 @@ async def search_user_projects_tasks(
 # ---------------------------------------------------------------------------
 # CRM
 # ---------------------------------------------------------------------------
+# Read-only tools:
+# - search_crm_opportunities
+# - get_crm_opportunity
+# - get_crm_pipeline_summary
+# - get_crm_opportunities_closing_soon
+# - get_stale_crm_opportunities
+# - get_crm_salesperson_pipeline
+# ---------------------------------------------------------------------------
 
 @mcp.tool()
 async def search_crm_opportunities(
@@ -614,6 +622,296 @@ async def get_crm_opportunity(
             exc,
             params,
         )
+
+
+
+@mcp.tool()
+async def get_crm_pipeline_summary(
+    limit: int = 100,
+):
+    """
+    Summarize active CRM opportunities by stage.
+
+    Read-only.
+    """
+
+    tool = "get_crm_pipeline_summary"
+    params = {"limit": limit}
+
+    try:
+        rows = await odoo.search_read(
+            model="crm.lead",
+            domain=[
+                ["type", "=", "opportunity"],
+                ["active", "=", True],
+            ],
+            fields=[
+                "id",
+                "name",
+                "partner_id",
+                "user_id",
+                "team_id",
+                "stage_id",
+                "expected_revenue",
+                "probability",
+                "date_deadline",
+                "priority",
+            ],
+            limit=clamp_limit(limit, settings.max_results),
+            order="stage_id asc, id asc",
+        )
+
+        by_stage: dict[int, dict[str, Any]] = {}
+
+        for row in rows:
+            stage = row.get("stage_id") or [0, "Unspecified"]
+            stage_id = stage[0] if stage else 0
+            stage_name = stage[1] if stage and len(stage) > 1 else "Unspecified"
+
+            if stage_id not in by_stage:
+                by_stage[stage_id] = {
+                    "stage_id": stage_id,
+                    "stage_name": stage_name,
+                    "opportunity_count": 0,
+                    "expected_revenue": 0.0,
+                }
+
+            by_stage[stage_id]["opportunity_count"] += 1
+            by_stage[stage_id]["expected_revenue"] += float(
+                row.get("expected_revenue") or 0
+            )
+
+        log_tool(tool, params, len(rows))
+
+        return {
+            "success": True,
+            "count": len(rows),
+            "stages": list(by_stage.values()),
+            "opportunities": rows,
+        }
+
+    except Exception as exc:
+        return failed(tool, exc, params)
+
+
+@mcp.tool()
+async def get_crm_opportunities_closing_soon(
+    within_days: int = 7,
+    limit: int = 20,
+):
+    """
+    Return active CRM opportunities with deadlines approaching.
+
+    Read-only.
+    """
+
+    tool = "get_crm_opportunities_closing_soon"
+    params = {
+        "within_days": within_days,
+        "limit": limit,
+    }
+
+    try:
+        if within_days < 0:
+            raise ValueError("within_days must be 0 or greater.")
+
+        today = date.today()
+        until = (today + timedelta(days=within_days)).isoformat()
+
+        rows = await odoo.search_read(
+            model="crm.lead",
+            domain=[
+                ["type", "=", "opportunity"],
+                ["active", "=", True],
+                ["date_deadline", "!=", False],
+                ["date_deadline", ">=", today.isoformat()],
+                ["date_deadline", "<=", until],
+            ],
+            fields=[
+                "id",
+                "name",
+                "partner_id",
+                "user_id",
+                "team_id",
+                "stage_id",
+                "expected_revenue",
+                "probability",
+                "date_deadline",
+                "priority",
+            ],
+            limit=clamp_limit(limit, settings.max_results),
+            order="date_deadline asc, id asc",
+        )
+
+        opportunities = []
+
+        for row in rows:
+            item = dict(row)
+            deadline = row.get("date_deadline")
+
+            if deadline:
+                deadline_date = date.fromisoformat(deadline)
+                item["days_until_deadline"] = (deadline_date - today).days
+
+            opportunities.append(item)
+
+        log_tool(tool, params, len(opportunities))
+
+        return {
+            "success": True,
+            "as_of_date": today.isoformat(),
+            "within_days": within_days,
+            "count": len(opportunities),
+            "opportunities": opportunities,
+        }
+
+    except Exception as exc:
+        return failed(tool, exc, params)
+
+
+@mcp.tool()
+async def get_stale_crm_opportunities(
+    inactive_days: int = 30,
+    limit: int = 20,
+):
+    """
+    Return active opportunities that have not been updated recently.
+
+    Read-only.
+    """
+
+    tool = "get_stale_crm_opportunities"
+    params = {
+        "inactive_days": inactive_days,
+        "limit": limit,
+    }
+
+    try:
+        if inactive_days < 0:
+            raise ValueError("inactive_days must be 0 or greater.")
+
+        cutoff = (date.today() - timedelta(days=inactive_days)).isoformat()
+
+        rows = await odoo.search_read(
+            model="crm.lead",
+            domain=[
+                ["type", "=", "opportunity"],
+                ["active", "=", True],
+                ["write_date", "<", f"{cutoff} 00:00:00"],
+            ],
+            fields=[
+                "id",
+                "name",
+                "partner_id",
+                "user_id",
+                "team_id",
+                "stage_id",
+                "expected_revenue",
+                "probability",
+                "date_deadline",
+                "priority",
+                "write_date",
+            ],
+            limit=clamp_limit(limit, settings.max_results),
+            order="write_date asc, id asc",
+        )
+
+        log_tool(tool, params, len(rows))
+
+        return {
+            "success": True,
+            "inactive_days": inactive_days,
+            "count": len(rows),
+            "opportunities": rows,
+        }
+
+    except Exception as exc:
+        return failed(tool, exc, params)
+
+
+@mcp.tool()
+async def get_crm_salesperson_pipeline(
+    search: str,
+    limit: int = 100,
+):
+    """
+    Return active opportunities assigned to matching salespeople.
+
+    Read-only.
+    """
+
+    tool = "get_crm_salesperson_pipeline"
+    params = {
+        "search": clean_search(search),
+        "limit": limit,
+    }
+
+    try:
+        if not params["search"]:
+            raise ValueError("Provide a salesperson name or login/email.")
+
+        users = await odoo.search_read(
+            model="res.users",
+            domain=[
+                "|",
+                ["name", "ilike", params["search"]],
+                ["login", "ilike", params["search"]],
+            ],
+            fields=[
+                "id",
+                "name",
+                "login",
+                "active",
+            ],
+            limit=clamp_limit(limit, settings.max_results),
+            order="name asc",
+        )
+
+        if not users:
+            return {
+                "success": True,
+                "count": 0,
+                "matched_users": [],
+                "opportunities": [],
+                "message": "No matching salesperson found.",
+            }
+
+        user_ids = [user["id"] for user in users]
+
+        rows = await odoo.search_read(
+            model="crm.lead",
+            domain=[
+                ["type", "=", "opportunity"],
+                ["active", "=", True],
+                ["user_id", "in", user_ids],
+            ],
+            fields=[
+                "id",
+                "name",
+                "partner_id",
+                "user_id",
+                "team_id",
+                "stage_id",
+                "expected_revenue",
+                "probability",
+                "date_deadline",
+                "priority",
+            ],
+            limit=clamp_limit(limit, settings.max_results),
+            order="user_id asc, stage_id asc, id asc",
+        )
+
+        log_tool(tool, params, len(rows))
+
+        return {
+            "success": True,
+            "count": len(rows),
+            "matched_users": users,
+            "opportunities": rows,
+        }
+
+    except Exception as exc:
+        return failed(tool, exc, params)
 
 
 # ---------------------------------------------------------------------------
@@ -2185,6 +2483,14 @@ async def get_vendor_outstanding_balance(
 # - search_products
 # - get_stock_by_location
 # - search_inventory_transfers
+#
+# Reporting tools:
+# - get_low_stock_products
+# - get_out_of_stock_products
+# - get_inventory_stock_summary
+# - get_late_inventory_transfers
+# - get_pending_receipts
+# - get_pending_deliveries
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
@@ -2447,6 +2753,306 @@ async def search_inventory_transfers(
             exc,
             params,
         )
+
+
+
+@mcp.tool()
+async def get_low_stock_products(
+    threshold: float = 10,
+    limit: int = 50,
+):
+    """
+    Return products whose available stock is at or below a threshold.
+
+    Read-only.
+    """
+
+    tool = "get_low_stock_products"
+    params = {
+        "threshold": threshold,
+        "limit": limit,
+    }
+
+    try:
+        rows = await odoo.search_read(
+            model="product.product",
+            domain=[
+                ["active", "=", True],
+                ["type", "=", "consu"],
+                ["qty_available", "<=", threshold],
+            ],
+            fields=[
+                "id",
+                "name",
+                "default_code",
+                "barcode",
+                "uom_id",
+                "qty_available",
+                "virtual_available",
+            ],
+            limit=clamp_limit(limit, settings.max_results),
+            order="qty_available asc, name asc",
+        )
+
+        log_tool(tool, params, len(rows))
+
+        return {
+            "success": True,
+            "threshold": threshold,
+            "count": len(rows),
+            "products": rows,
+        }
+
+    except Exception as exc:
+        return failed(tool, exc, params)
+
+
+@mcp.tool()
+async def get_out_of_stock_products(
+    limit: int = 50,
+):
+    """
+    Return active products with no on-hand stock.
+
+    Read-only.
+    """
+
+    tool = "get_out_of_stock_products"
+    params = {"limit": limit}
+
+    try:
+        rows = await odoo.search_read(
+            model="product.product",
+            domain=[
+                ["active", "=", True],
+                ["type", "=", "consu"],
+                ["qty_available", "<=", 0],
+            ],
+            fields=[
+                "id",
+                "name",
+                "default_code",
+                "barcode",
+                "uom_id",
+                "qty_available",
+                "virtual_available",
+            ],
+            limit=clamp_limit(limit, settings.max_results),
+            order="qty_available asc, name asc",
+        )
+
+        log_tool(tool, params, len(rows))
+
+        return {
+            "success": True,
+            "count": len(rows),
+            "products": rows,
+        }
+
+    except Exception as exc:
+        return failed(tool, exc, params)
+
+
+@mcp.tool()
+async def get_inventory_stock_summary(
+    limit: int = 100,
+):
+    """
+    Return a stock summary for active products.
+
+    Read-only.
+    """
+
+    tool = "get_inventory_stock_summary"
+    params = {"limit": limit}
+
+    try:
+        rows = await odoo.search_read(
+            model="product.product",
+            domain=[
+                ["active", "=", True],
+            ],
+            fields=[
+                "id",
+                "name",
+                "default_code",
+                "type",
+                "uom_id",
+                "qty_available",
+                "virtual_available",
+            ],
+            limit=clamp_limit(limit, settings.max_results),
+            order="name asc",
+        )
+
+        total_on_hand = sum(
+            float(row.get("qty_available") or 0)
+            for row in rows
+        )
+        total_forecast = sum(
+            float(row.get("virtual_available") or 0)
+            for row in rows
+        )
+
+        log_tool(tool, params, len(rows))
+
+        return {
+            "success": True,
+            "count": len(rows),
+            "total_on_hand_quantity": total_on_hand,
+            "total_forecast_quantity": total_forecast,
+            "products": rows,
+        }
+
+    except Exception as exc:
+        return failed(tool, exc, params)
+
+
+@mcp.tool()
+async def get_late_inventory_transfers(
+    limit: int = 50,
+):
+    """
+    Return unfinished inventory transfers whose scheduled date has passed.
+
+    Read-only.
+    """
+
+    tool = "get_late_inventory_transfers"
+    params = {"limit": limit}
+
+    try:
+        today_text = date.today().isoformat()
+
+        rows = await odoo.search_read(
+            model="stock.picking",
+            domain=[
+                ["state", "not in", ["done", "cancel"]],
+                ["scheduled_date", "!=", False],
+                ["scheduled_date", "<", f"{today_text} 00:00:00"],
+            ],
+            fields=[
+                "id",
+                "name",
+                "partner_id",
+                "picking_type_id",
+                "location_id",
+                "location_dest_id",
+                "scheduled_date",
+                "date_deadline",
+                "state",
+                "origin",
+                "company_id",
+            ],
+            limit=clamp_limit(limit, settings.max_results),
+            order="scheduled_date asc, id asc",
+        )
+
+        log_tool(tool, params, len(rows))
+
+        return {
+            "success": True,
+            "as_of_date": today_text,
+            "count": len(rows),
+            "transfers": rows,
+        }
+
+    except Exception as exc:
+        return failed(tool, exc, params)
+
+
+@mcp.tool()
+async def get_pending_receipts(
+    limit: int = 50,
+):
+    """
+    Return unfinished incoming inventory receipts.
+
+    Read-only.
+    """
+
+    tool = "get_pending_receipts"
+    params = {"limit": limit}
+
+    try:
+        rows = await odoo.search_read(
+            model="stock.picking",
+            domain=[
+                ["picking_type_code", "=", "incoming"],
+                ["state", "not in", ["done", "cancel"]],
+            ],
+            fields=[
+                "id",
+                "name",
+                "partner_id",
+                "picking_type_id",
+                "scheduled_date",
+                "date_deadline",
+                "state",
+                "origin",
+                "company_id",
+            ],
+            limit=clamp_limit(limit, settings.max_results),
+            order="scheduled_date asc, id asc",
+        )
+
+        log_tool(tool, params, len(rows))
+
+        return {
+            "success": True,
+            "count": len(rows),
+            "receipts": rows,
+        }
+
+    except Exception as exc:
+        return failed(tool, exc, params)
+
+
+@mcp.tool()
+async def get_pending_deliveries(
+    limit: int = 50,
+):
+    """
+    Return unfinished outgoing customer deliveries.
+
+    Read-only.
+    """
+
+    tool = "get_pending_deliveries"
+    params = {"limit": limit}
+
+    try:
+        rows = await odoo.search_read(
+            model="stock.picking",
+            domain=[
+                ["picking_type_code", "=", "outgoing"],
+                ["state", "not in", ["done", "cancel"]],
+            ],
+            fields=[
+                "id",
+                "name",
+                "partner_id",
+                "picking_type_id",
+                "scheduled_date",
+                "date_deadline",
+                "state",
+                "origin",
+                "company_id",
+            ],
+            limit=clamp_limit(limit, settings.max_results),
+            order="scheduled_date asc, id asc",
+        )
+
+        log_tool(tool, params, len(rows))
+
+        return {
+            "success": True,
+            "count": len(rows),
+            "deliveries": rows,
+        }
+
+    except Exception as exc:
+        return failed(tool, exc, params)
 
 
 # ---------------------------------------------------------------------------
