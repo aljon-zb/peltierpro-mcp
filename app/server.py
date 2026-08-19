@@ -2768,6 +2768,7 @@ async def get_low_stock_products(
     """
 
     tool = "get_low_stock_products"
+
     params = {
         "threshold": threshold,
         "limit": limit,
@@ -2779,7 +2780,6 @@ async def get_low_stock_products(
             domain=[
                 ["active", "=", True],
                 ["type", "=", "consu"],
-                ["qty_available", "<=", threshold],
             ],
             fields=[
                 "id",
@@ -2790,21 +2790,49 @@ async def get_low_stock_products(
                 "qty_available",
                 "virtual_available",
             ],
-            limit=clamp_limit(limit, settings.max_results),
-            order="qty_available asc, name asc",
+            limit=clamp_limit(
+                limit,
+                settings.max_results,
+            ),
+            order="name asc",
         )
 
-        log_tool(tool, params, len(rows))
+        products = [
+            row
+            for row in rows
+            if float(
+                row.get("qty_available") or 0
+            ) <= threshold
+        ]
+
+        products.sort(
+            key=lambda row: (
+                float(
+                    row.get("qty_available") or 0
+                ),
+                row.get("name") or "",
+            )
+        )
+
+        log_tool(
+            tool,
+            params,
+            len(products),
+        )
 
         return {
             "success": True,
             "threshold": threshold,
-            "count": len(rows),
-            "products": rows,
+            "count": len(products),
+            "products": products,
         }
 
     except Exception as exc:
-        return failed(tool, exc, params)
+        return failed(
+            tool,
+            exc,
+            params,
+        )
 
 
 @mcp.tool()
@@ -2818,7 +2846,10 @@ async def get_out_of_stock_products(
     """
 
     tool = "get_out_of_stock_products"
-    params = {"limit": limit}
+
+    params = {
+        "limit": limit,
+    }
 
     try:
         rows = await odoo.search_read(
@@ -2826,7 +2857,6 @@ async def get_out_of_stock_products(
             domain=[
                 ["active", "=", True],
                 ["type", "=", "consu"],
-                ["qty_available", "<=", 0],
             ],
             fields=[
                 "id",
@@ -2837,20 +2867,48 @@ async def get_out_of_stock_products(
                 "qty_available",
                 "virtual_available",
             ],
-            limit=clamp_limit(limit, settings.max_results),
-            order="qty_available asc, name asc",
+            limit=clamp_limit(
+                limit,
+                settings.max_results,
+            ),
+            order="name asc",
         )
 
-        log_tool(tool, params, len(rows))
+        products = [
+            row
+            for row in rows
+            if float(
+                row.get("qty_available") or 0
+            ) <= 0
+        ]
+
+        products.sort(
+            key=lambda row: (
+                float(
+                    row.get("qty_available") or 0
+                ),
+                row.get("name") or "",
+            )
+        )
+
+        log_tool(
+            tool,
+            params,
+            len(products),
+        )
 
         return {
             "success": True,
-            "count": len(rows),
-            "products": rows,
+            "count": len(products),
+            "products": products,
         }
 
     except Exception as exc:
-        return failed(tool, exc, params)
+        return failed(
+            tool,
+            exc,
+            params,
+        )
 
 
 @mcp.tool()
