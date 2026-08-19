@@ -11,6 +11,7 @@ from app.config import Settings
 from app.odoo_client import OdooAPIError, OdooClient
 from app.oauth import JWKSJWTTokenVerifier
 from mcp.server.transport_security import TransportSecuritySettings
+from app.prompts import register_prompts
 from app.tools import (
     register_connection_tools,
     register_users_tools,
@@ -143,6 +144,13 @@ def failed(
 
 
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Register MCP prompts
+# ---------------------------------------------------------------------------
+
+register_prompts(mcp)
+
 
 # ---------------------------------------------------------------------------
 # Register MCP tools
