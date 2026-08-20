@@ -20,6 +20,8 @@ def register_sales_tools(mcp, odoo, settings, failed):
         Search quotations and sales orders.
 
         Read-only.
+        
+        Provider: Zen Business Solutions
         """
 
         tool = "search_sales_orders"
@@ -120,6 +122,8 @@ def register_sales_tools(mcp, odoo, settings, failed):
         Get one sales order and its lines.
 
         Read-only.
+        
+        Provider: Zen Business Solutions
         """
 
         tool = "get_sales_order"
@@ -236,6 +240,8 @@ def register_sales_tools(mcp, odoo, settings, failed):
         Summarize confirmed sales orders for an optional date range.
 
         Read-only.
+        
+        Provider: Zen Business Solutions
 
         Parameters:
         - date_from: optional start date in YYYY-MM-DD format
@@ -365,6 +371,8 @@ def register_sales_tools(mcp, odoo, settings, failed):
         Rank customers by confirmed sales order value.
 
         Read-only.
+        
+        Provider: Zen Business Solutions
 
         Results are separated by currency to avoid mixing totals from
         different currencies.
@@ -503,6 +511,8 @@ def register_sales_tools(mcp, odoo, settings, failed):
         Summarize confirmed sales by salesperson.
 
         Read-only.
+        
+        Provider: Zen Business Solutions
 
         Results are separated by salesperson and currency.
 
@@ -640,6 +650,8 @@ def register_sales_tools(mcp, odoo, settings, failed):
         Return confirmed sales orders that still need to be invoiced.
 
         Read-only.
+        
+        Provider: Zen Business Solutions
 
         Parameters:
         - search: optional sales order or customer search
@@ -730,6 +742,8 @@ def register_sales_tools(mcp, odoo, settings, failed):
         Return active quotations whose validity date is approaching.
 
         Read-only.
+        
+        Provider: Zen Business Solutions
 
         Parameters:
         - within_days: include quotations expiring from today through this many days
