@@ -185,7 +185,6 @@ async def zenbiz_icon(request):
     return FileResponse(
         path=icon_path,
         media_type="image/png",
-        filename="zenbiz-icon.png",
     )
 
 
