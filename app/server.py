@@ -173,11 +173,11 @@ async def home(request):
     methods=["GET"],
 )
 async def zenbiz_icon(request):
+    from pathlib import Path
     from starlette.responses import FileResponse
 
     icon_path = (
         Path(__file__).resolve().parent
-        / "app"
         / "assets"
         / "zenbiz-icon.png"
     )
