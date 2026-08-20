@@ -1,7 +1,8 @@
 import logging
+from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Icon
 from mcp.server.auth.settings import AuthSettings
 from pydantic import AnyHttpUrl
 
@@ -31,6 +32,22 @@ logging.basicConfig(
         settings.log_level,
         logging.INFO,
     )
+)
+
+
+# ---------------------------------------------------------------------------
+# MCP icon
+# ---------------------------------------------------------------------------
+
+ZENBIZ_ICON_URL = (
+    "https://peltierpro-mcp-production.up.railway.app"
+    "/assets/zenbiz-icon.png"
+)
+
+ZENBIZ_ICON = Icon(
+    src=ZENBIZ_ICON_URL,
+    mimeType="image/png",
+    sizes=["128x128"],
 )
 
 
@@ -109,11 +126,67 @@ if settings.auth_enabled:
     )
 
 
+# ---------------------------------------------------------------------------
+# MCP server
+# ---------------------------------------------------------------------------
+
 mcp = FastMCP(
     "ZenBiz PeltierPro Odoo MCP",
     instructions=SERVER_INSTRUCTIONS,
+    website_url="https://peltierpro-mcp-production.up.railway.app",
+    icons=[ZENBIZ_ICON],
     **mcp_kwargs,
 )
+
+
+# ---------------------------------------------------------------------------
+# Root service information
+# ---------------------------------------------------------------------------
+
+@mcp.custom_route(
+    "/",
+    methods=["GET"],
+)
+async def home(request):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(
+        {
+            "status": "online",
+            "service": "ZenBiz PeltierPro Odoo MCP",
+            "provider": "Zen Business Solutions",
+            "client": "Peltier Pro",
+            "access": "read-only",
+            "mcp_endpoint": "/mcp",
+            "health_endpoint": "/health",
+            "icon": ZENBIZ_ICON_URL,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# MCP icon route
+# ---------------------------------------------------------------------------
+
+@mcp.custom_route(
+    "/assets/zenbiz-icon.png",
+    methods=["GET"],
+)
+async def zenbiz_icon(request):
+    from starlette.responses import FileResponse
+
+    icon_path = (
+        Path(__file__).resolve().parent
+        / "app"
+        / "assets"
+        / "zenbiz-icon.png"
+    )
+
+    return FileResponse(
+        path=icon_path,
+        media_type="image/png",
+        filename="zenbiz-icon.png",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -130,8 +203,13 @@ async def health(request):
     return JSONResponse(
         {
             "status": "ok",
+            "service": "ZenBiz PeltierPro Odoo MCP",
+            "provider": "Zen Business Solutions",
+            "client": "Peltier Pro",
+            "access": "read-only",
             "oauth_enabled": settings.auth_enabled,
             "transport": settings.transport,
+            "icon": ZENBIZ_ICON_URL,
         }
     )
 
@@ -183,13 +261,54 @@ register_prompts(mcp)
 # Register MCP tools
 # ---------------------------------------------------------------------------
 
-register_connection_tools(mcp, odoo, settings, failed)
-register_users_tools(mcp, odoo, settings, failed)
-register_projects_tools(mcp, odoo, settings, failed)
-register_crm_tools(mcp, odoo, settings, failed)
-register_sales_tools(mcp, odoo, settings, failed)
-register_accounting_tools(mcp, odoo, settings, failed)
-register_inventory_tools(mcp, odoo, settings, failed)
+register_connection_tools(
+    mcp,
+    odoo,
+    settings,
+    failed,
+)
+
+register_users_tools(
+    mcp,
+    odoo,
+    settings,
+    failed,
+)
+
+register_projects_tools(
+    mcp,
+    odoo,
+    settings,
+    failed,
+)
+
+register_crm_tools(
+    mcp,
+    odoo,
+    settings,
+    failed,
+)
+
+register_sales_tools(
+    mcp,
+    odoo,
+    settings,
+    failed,
+)
+
+register_accounting_tools(
+    mcp,
+    odoo,
+    settings,
+    failed,
+)
+
+register_inventory_tools(
+    mcp,
+    odoo,
+    settings,
+    failed,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +320,7 @@ if __name__ == "__main__":
         mcp.run(
             transport="stdio"
         )
+
     else:
         mcp.settings.host = settings.host
         mcp.settings.port = settings.port
