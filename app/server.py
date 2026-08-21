@@ -21,6 +21,7 @@ from app.tools import (
     register_sales_tools,
     register_accounting_tools,
     register_inventory_tools,
+    register_contacts_tools,
 )
 
 

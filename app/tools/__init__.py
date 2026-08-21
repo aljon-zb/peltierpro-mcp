@@ -5,3 +5,4 @@ from .crm import register_crm_tools
 from .sales import register_sales_tools
 from .accounting import register_accounting_tools
 from .inventory import register_inventory_tools
+from .contacts import register_contacts_tools
