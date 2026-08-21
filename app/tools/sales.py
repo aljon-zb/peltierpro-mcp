@@ -857,3 +857,678 @@ def register_sales_tools(mcp, odoo, settings, failed):
 
 
     # ---------------------------------------------------------------------------
+
+
+    # ---------------------------------------------------------------------------
+    # Draft quotation tools
+    # ---------------------------------------------------------------------------
+
+    async def _prepare_quotation_items(
+        items: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not items:
+            raise ValueError("At least one quotation item is required.")
+
+        if len(items) > settings.max_results:
+            raise ValueError(
+                f"Too many quotation items. Maximum allowed is {settings.max_results}."
+            )
+
+        requested: dict[int, float] = {}
+
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"Item {index} must contain product_id and quantity."
+                )
+
+            product_id = item.get("product_id")
+            quantity = item.get("quantity")
+
+            positive_id(
+                product_id,
+                f"items[{index}].product_id",
+            )
+
+            try:
+                quantity = float(quantity)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"items[{index}].quantity must be a number."
+                )
+
+            if quantity <= 0:
+                raise ValueError(
+                    f"items[{index}].quantity must be greater than 0."
+                )
+
+            requested[product_id] = requested.get(product_id, 0.0) + quantity
+
+        product_ids = list(requested.keys())
+
+        products = await odoo.read(
+            model="product.product",
+            record_ids=product_ids,
+            fields=[
+                "id",
+                "display_name",
+                "active",
+                "sale_ok",
+                "type",
+                "is_storable",
+                "uom_id",
+                "qty_available",
+                "free_qty",
+                "virtual_available",
+            ],
+        )
+
+        products_by_id = {
+            row["id"]: row
+            for row in products
+        }
+
+        missing_ids = [
+            product_id
+            for product_id in product_ids
+            if product_id not in products_by_id
+        ]
+
+        if missing_ids:
+            raise ValueError(
+                "One or more products were not found or access was denied: "
+                + ", ".join(str(product_id) for product_id in missing_ids)
+            )
+
+        checked_items = []
+        unavailable_items = []
+
+        for product_id, requested_qty in requested.items():
+            product = products_by_id[product_id]
+
+            if not product.get("active", True):
+                raise ValueError(
+                    f'Product "{product.get("display_name") or product_id}" is inactive.'
+                )
+
+            if not product.get("sale_ok", False):
+                raise ValueError(
+                    f'Product "{product.get("display_name") or product_id}" '
+                    "is not configured for Sales."
+                )
+
+            product_type = product.get("type")
+            is_service = product_type == "service"
+            is_storable = bool(product.get("is_storable", False))
+
+            qty_available = float(product.get("qty_available") or 0.0)
+            free_qty = float(product.get("free_qty") or 0.0)
+            virtual_available = float(product.get("virtual_available") or 0.0)
+
+            requires_stock_check = (
+                not is_service
+                and (
+                    is_storable
+                    or qty_available != 0.0
+                    or free_qty != 0.0
+                )
+            )
+
+            enough_stock = (
+                True
+                if not requires_stock_check
+                else free_qty >= requested_qty
+            )
+
+            uom = product.get("uom_id") or [None, ""]
+
+            result = {
+                "product_id": product_id,
+                "product_name": product.get("display_name"),
+                "requested_quantity": requested_qty,
+                "uom_id": (
+                    uom[0]
+                    if isinstance(uom, (list, tuple)) and uom
+                    else None
+                ),
+                "uom_name": (
+                    uom[1]
+                    if isinstance(uom, (list, tuple)) and len(uom) > 1
+                    else ""
+                ),
+                "product_type": product_type,
+                "is_storable": is_storable,
+                "stock_check_required": requires_stock_check,
+                "qty_available": qty_available,
+                "free_qty": free_qty,
+                "forecast_quantity": virtual_available,
+                "enough_stock": enough_stock,
+                "shortage_quantity": (
+                    0.0
+                    if enough_stock
+                    else requested_qty - free_qty
+                ),
+            }
+
+            checked_items.append(result)
+
+            if not enough_stock:
+                unavailable_items.append(result)
+
+        return {
+            "available": len(unavailable_items) == 0,
+            "items": checked_items,
+            "unavailable_items": unavailable_items,
+        }
+
+
+    @mcp.tool()
+    async def check_quotation_stock(
+        items: list[dict[str, Any]],
+    ):
+        """
+        Check whether requested products have enough free stock before
+        creating a quotation.
+
+        Read-only.
+
+        Item format:
+        [
+            {"product_id": 123, "quantity": 10}
+        ]
+
+        Stock-controlled products use free_qty.
+        Services/non-stock products are not blocked by inventory quantity.
+
+        Provider: Zen Business Solutions
+        """
+
+        tool = "check_quotation_stock"
+        params = {"items": items}
+
+        try:
+            result = await _prepare_quotation_items(items)
+
+            log_tool(
+                tool,
+                params,
+                len(result["items"]),
+            )
+
+            return branded_response(
+                {
+                    "success": True,
+                    **result,
+                }
+            )
+
+        except Exception as exc:
+            return failed(
+                tool,
+                exc,
+                params,
+            )
+
+
+    @mcp.tool()
+    async def create_draft_quotation(
+        customer_id: int,
+        items: list[dict[str, Any]],
+        client_order_ref: str = "",
+        note: str = "",
+    ):
+        """
+        Create a DRAFT Sales quotation only when all stock-controlled
+        products have enough free stock.
+
+        This tool never confirms the quotation.
+
+        If Product A has free_qty = 8 and quantity = 10,
+        the quotation is rejected and nothing is created.
+
+        Item format:
+        [
+            {"product_id": 123, "quantity": 10}
+        ]
+
+        Provider: Zen Business Solutions
+        """
+
+        tool = "create_draft_quotation"
+
+        params = {
+            "customer_id": customer_id,
+            "items": items,
+            "client_order_ref": clean_search(client_order_ref),
+            "note": note,
+        }
+
+        try:
+            positive_id(
+                customer_id,
+                "customer_id",
+            )
+
+            customers = await odoo.read(
+                model="res.partner",
+                record_ids=[customer_id],
+                fields=[
+                    "id",
+                    "display_name",
+                    "active",
+                ],
+            )
+
+            if not customers:
+                raise ValueError(
+                    "Customer not found or access denied."
+                )
+
+            if not customers[0].get("active", True):
+                raise ValueError(
+                    "The selected customer is inactive."
+                )
+
+            stock_result = await _prepare_quotation_items(items)
+
+            if not stock_result["available"]:
+                shortages = [
+                    {
+                        "product_id": item["product_id"],
+                        "product_name": item["product_name"],
+                        "requested_quantity": item["requested_quantity"],
+                        "free_qty": item["free_qty"],
+                        "shortage_quantity": item["shortage_quantity"],
+                        "uom_name": item["uom_name"],
+                    }
+                    for item in stock_result["unavailable_items"]
+                ]
+
+                log_tool(
+                    tool,
+                    params,
+                    0,
+                )
+
+                return branded_response(
+                    {
+                        "success": False,
+                        "created": False,
+                        "reason": "insufficient_stock",
+                        "message": (
+                            "Quotation was not created because one or more "
+                            "products do not have enough free stock."
+                        ),
+                        "shortages": shortages,
+                        "stock_check": stock_result,
+                    }
+                )
+
+            order_lines = [
+                [
+                    0,
+                    0,
+                    {
+                        "product_id": item["product_id"],
+                        "product_uom_qty": item["requested_quantity"],
+                    },
+                ]
+                for item in stock_result["items"]
+            ]
+
+            values: dict[str, Any] = {
+                "partner_id": customer_id,
+                "order_line": order_lines,
+            }
+
+            if params["client_order_ref"]:
+                values["client_order_ref"] = params["client_order_ref"]
+
+            if note:
+                values["note"] = note
+
+            order_id = await odoo.create(
+                model="sale.order",
+                values=values,
+            )
+
+            if isinstance(order_id, list):
+                if not order_id:
+                    raise ValueError(
+                        "Odoo did not return a quotation ID."
+                    )
+                order_id = order_id[0]
+
+            positive_id(
+                order_id,
+                "created_order_id",
+            )
+
+            orders = await odoo.read(
+                model="sale.order",
+                record_ids=[order_id],
+                fields=[
+                    "id",
+                    "name",
+                    "partner_id",
+                    "user_id",
+                    "date_order",
+                    "state",
+                    "currency_id",
+                    "amount_untaxed",
+                    "amount_tax",
+                    "amount_total",
+                    "order_line",
+                ],
+            )
+
+            if not orders:
+                raise ValueError(
+                    "Quotation was created but could not be read back."
+                )
+
+            order = orders[0]
+
+            if order.get("state") != "draft":
+                raise ValueError(
+                    "Quotation was created, but Odoo returned an unexpected "
+                    f'state: {order.get("state")}.'
+                )
+
+            line_ids = (
+                order.get("order_line") or []
+            )[: settings.max_results]
+
+            lines = []
+
+            if line_ids:
+                lines = await odoo.read(
+                    model="sale.order.line",
+                    record_ids=line_ids,
+                    fields=[
+                        "id",
+                        "product_id",
+                        "name",
+                        "product_uom_qty",
+                        "product_uom",
+                        "price_unit",
+                        "discount",
+                        "price_subtotal",
+                        "price_total",
+                    ],
+                )
+
+            log_tool(
+                tool,
+                params,
+                1 + len(lines),
+            )
+
+            return branded_response(
+                {
+                    "success": True,
+                    "created": True,
+                    "message": (
+                        "Draft quotation created successfully. "
+                        "It has NOT been confirmed."
+                    ),
+                    "requires_confirmation": True,
+                    "confirmation_action": "confirm_sales_order",
+                    "confirmation_prompt": (
+                        "The draft quotation has been created. "
+                        "Show the quotation details to the user and ask: "
+                        "'Would you like me to confirm this Sales Order?' "
+                        "Do not confirm unless the user explicitly agrees."
+                    ),
+                    "quotation": order,
+                    "lines": lines,
+                    "stock_check": stock_result,
+                }
+            )
+
+        except Exception as exc:
+            return failed(
+                tool,
+                exc,
+                params,
+            )
+
+
+    @mcp.tool()
+    async def confirm_sales_order(
+        order_id: int,
+        user_confirmed: bool = False,
+    ):
+        """
+        Confirm an existing DRAFT quotation and turn it into a Sales Order.
+
+        IMPORTANT SAFETY RULE:
+        This tool may only be called after the user has explicitly confirmed
+        that they want to proceed with the draft quotation shown by Claude.
+
+        Before confirmation, this tool:
+        - verifies the quotation still exists
+        - verifies it is still in draft state
+        - reloads the quotation lines
+        - re-checks free stock for all stock-controlled products
+        - refuses confirmation if stock is no longer sufficient
+
+        The user_confirmed parameter MUST be True.
+        If it is False, no confirmation occurs.
+
+        Provider: Zen Business Solutions
+        """
+
+        tool = "confirm_sales_order"
+
+        params = {
+            "order_id": order_id,
+            "user_confirmed": user_confirmed,
+        }
+
+        try:
+            positive_id(
+                order_id,
+                "order_id",
+            )
+
+            if user_confirmed is not True:
+                return branded_response(
+                    {
+                        "success": False,
+                        "confirmed": False,
+                        "requires_confirmation": True,
+                        "message": (
+                            "Sales Order confirmation was not performed. "
+                            "Explicit user confirmation is required."
+                        ),
+                    }
+                )
+
+            orders = await odoo.read(
+                model="sale.order",
+                record_ids=[order_id],
+                fields=[
+                    "id",
+                    "name",
+                    "partner_id",
+                    "state",
+                    "currency_id",
+                    "amount_untaxed",
+                    "amount_tax",
+                    "amount_total",
+                    "order_line",
+                ],
+            )
+
+            if not orders:
+                raise ValueError(
+                    "Quotation not found or access denied."
+                )
+
+            order = orders[0]
+
+            if order.get("state") != "draft":
+                return branded_response(
+                    {
+                        "success": False,
+                        "confirmed": False,
+                        "message": (
+                            "Only draft quotations can be confirmed by this tool."
+                        ),
+                        "current_state": order.get("state"),
+                        "quotation": order,
+                    }
+                )
+
+            line_ids = (
+                order.get("order_line") or []
+            )[: settings.max_results]
+
+            if not line_ids:
+                raise ValueError(
+                    "The quotation has no order lines."
+                )
+
+            lines = await odoo.read(
+                model="sale.order.line",
+                record_ids=line_ids,
+                fields=[
+                    "id",
+                    "product_id",
+                    "product_uom_qty",
+                    "display_type",
+                ],
+            )
+
+            stock_items = []
+
+            for line in lines:
+                if line.get("display_type"):
+                    continue
+
+                product = line.get("product_id")
+                quantity = float(
+                    line.get("product_uom_qty") or 0.0
+                )
+
+                if not product or quantity <= 0:
+                    continue
+
+                product_id = (
+                    product[0]
+                    if isinstance(product, (list, tuple))
+                    else product
+                )
+
+                stock_items.append(
+                    {
+                        "product_id": product_id,
+                        "quantity": quantity,
+                    }
+                )
+
+            if not stock_items:
+                raise ValueError(
+                    "The quotation has no valid product lines to confirm."
+                )
+
+            stock_result = await _prepare_quotation_items(
+                stock_items
+            )
+
+            if not stock_result["available"]:
+                shortages = [
+                    {
+                        "product_id": item["product_id"],
+                        "product_name": item["product_name"],
+                        "requested_quantity": item["requested_quantity"],
+                        "free_qty": item["free_qty"],
+                        "shortage_quantity": item["shortage_quantity"],
+                        "uom_name": item["uom_name"],
+                    }
+                    for item in stock_result["unavailable_items"]
+                ]
+
+                return branded_response(
+                    {
+                        "success": False,
+                        "confirmed": False,
+                        "reason": "insufficient_stock",
+                        "message": (
+                            "The Sales Order was not confirmed because stock "
+                            "availability changed after the draft was created."
+                        ),
+                        "shortages": shortages,
+                        "stock_check": stock_result,
+                    }
+                )
+
+            # Call Odoo's real Sales confirmation workflow.
+            # Do NOT write state='sale' directly because action_confirm()
+            # performs Odoo's required downstream business logic.
+            await odoo.execute(
+                "sale.order",
+                "action_confirm",
+                [order_id],
+            )
+
+            confirmed_orders = await odoo.read(
+                model="sale.order",
+                record_ids=[order_id],
+                fields=[
+                    "id",
+                    "name",
+                    "partner_id",
+                    "user_id",
+                    "date_order",
+                    "state",
+                    "currency_id",
+                    "amount_untaxed",
+                    "amount_tax",
+                    "amount_total",
+                    "invoice_status",
+                    "order_line",
+                ],
+            )
+
+            if not confirmed_orders:
+                raise ValueError(
+                    "Sales Order was confirmed but could not be read back."
+                )
+
+            confirmed_order = confirmed_orders[0]
+
+            if confirmed_order.get("state") not in [
+                "sale",
+                "done",
+            ]:
+                raise ValueError(
+                    "Odoo did not return a confirmed Sales Order state."
+                )
+
+            log_tool(
+                tool,
+                params,
+                1,
+            )
+
+            return branded_response(
+                {
+                    "success": True,
+                    "confirmed": True,
+                    "message": (
+                        "The quotation was confirmed successfully "
+                        "and is now a Sales Order."
+                    ),
+                    "sales_order": confirmed_order,
+                    "stock_check": stock_result,
+                }
+            )
+
+        except Exception as exc:
+            return failed(
+                tool,
+                exc,
+                params,
+            )
