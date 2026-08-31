@@ -30,7 +30,7 @@ def register_contacts_tools(
     async def search_contacts(
         search: str = "",
         contact_type: str = "all",
-        company_type: str = "all",
+        is_company: bool | None = None,
         active_only: bool = True,
         limit: int = 20,
     ):
@@ -41,7 +41,6 @@ def register_contacts_tools(
         - Name
         - Email
         - Phone
-        - Mobile
         - Internal Reference
 
         contact_type:
@@ -52,10 +51,10 @@ def register_contacts_tools(
         - other
         - private
 
-        company_type:
-        - all
-        - person
-        - company
+        is_company:
+        - None = all contacts
+        - True = company
+        - False = person
 
         Examples:
         - Search for Jenny
@@ -67,7 +66,7 @@ def register_contacts_tools(
         params = {
             "search": search,
             "contact_type": contact_type,
-            "company_type": company_type,
+            "is_company": is_company,
             "active_only": active_only,
             "limit": limit,
         }
@@ -88,12 +87,6 @@ def register_contacts_tools(
                 "private",
             }
 
-            allowed_company_types = {
-                "all",
-                "person",
-                "company",
-            }
-
             if contact_type not in allowed_contact_types:
                 raise ValueError(
                     "Invalid contact_type. "
@@ -101,17 +94,6 @@ def register_contacts_tools(
                     + ", ".join(
                         sorted(
                             allowed_contact_types
-                        )
-                    )
-                )
-
-            if company_type not in allowed_company_types:
-                raise ValueError(
-                    "Invalid company_type. "
-                    "Allowed values: "
-                    + ", ".join(
-                        sorted(
-                            allowed_company_types
                         )
                     )
                 )
@@ -136,18 +118,17 @@ def register_contacts_tools(
                     )
                 )
 
-            if company_type != "all":
+            if is_company is not None:
                 domain.append(
                     (
-                        "company_type",
+                        "is_company",
                         "=",
-                        company_type,
+                        is_company,
                     )
                 )
 
             if search:
                 domain += [
-                    "|",
                     "|",
                     "|",
                     "|",
@@ -167,11 +148,6 @@ def register_contacts_tools(
                         search,
                     ),
                     (
-                        "mobile",
-                        "ilike",
-                        search,
-                    ),
-                    (
                         "ref",
                         "ilike",
                         search,
@@ -185,13 +161,11 @@ def register_contacts_tools(
                     "id",
                     "name",
                     "display_name",
-                    "company_type",
                     "is_company",
                     "type",
                     "parent_id",
                     "email",
                     "phone",
-                    "mobile",
                     "website",
                     "street",
                     "street2",
@@ -271,14 +245,12 @@ def register_contacts_tools(
                     "id",
                     "name",
                     "display_name",
-                    "company_type",
                     "is_company",
                     "type",
                     "parent_id",
                     "child_ids",
                     "email",
                     "phone",
-                    "mobile",
                     "website",
                     "street",
                     "street2",
@@ -421,11 +393,9 @@ def register_contacts_tools(
                     "id",
                     "name",
                     "display_name",
-                    "company_type",
                     "parent_id",
                     "email",
                     "phone",
-                    "mobile",
                     "website",
                     "city",
                     "state_id",
@@ -546,11 +516,9 @@ def register_contacts_tools(
                     "id",
                     "name",
                     "display_name",
-                    "company_type",
                     "parent_id",
                     "email",
                     "phone",
-                    "mobile",
                     "website",
                     "city",
                     "state_id",
@@ -603,7 +571,7 @@ def register_contacts_tools(
         - Customers
         - Vendors
         - Contacts with email
-        - Contacts with phone/mobile
+        - Contacts with phone
         - Sample recently modified contacts
 
         Example:
@@ -639,12 +607,11 @@ def register_contacts_tools(
                 ],
                 fields=[
                     "id",
-                    "company_type",
+                    "is_company",
                     "customer_rank",
                     "supplier_rank",
                     "email",
                     "phone",
-                    "mobile",
                 ],
                 limit=settings.max_results,
             )
@@ -657,18 +624,18 @@ def register_contacts_tools(
                 1
                 for contact in active_contacts
                 if contact.get(
-                    "company_type"
+                    "is_company"
                 )
-                == "company"
+                is True
             )
 
             persons = sum(
                 1
                 for contact in active_contacts
                 if contact.get(
-                    "company_type"
+                    "is_company"
                 )
-                == "person"
+                is False
             )
 
             customers = sum(
@@ -708,13 +675,8 @@ def register_contacts_tools(
             with_phone = sum(
                 1
                 for contact in active_contacts
-                if (
-                    contact.get(
-                        "phone"
-                    )
-                    or contact.get(
-                        "mobile"
-                    )
+                if contact.get(
+                    "phone"
                 )
             )
 
@@ -730,10 +692,8 @@ def register_contacts_tools(
                 fields=[
                     "id",
                     "name",
-                    "company_type",
                     "email",
                     "phone",
-                    "mobile",
                     "customer_rank",
                     "supplier_rank",
                     "write_date",
@@ -760,7 +720,7 @@ def register_contacts_tools(
                         "customers": customers,
                         "vendors": vendors,
                         "with_email": with_email,
-                        "with_phone_or_mobile": (
+                        "with_phone": (
                             with_phone
                         ),
                     },
@@ -825,7 +785,6 @@ def register_contacts_tools(
                 fields=[
                     "id",
                     "name",
-                    "company_type",
                     "is_company",
                 ],
                 limit=1,
@@ -870,7 +829,6 @@ def register_contacts_tools(
                     "type",
                     "email",
                     "phone",
-                    "mobile",
                     "function",
                     "parent_id",
                     "active",
@@ -977,16 +935,15 @@ def register_contacts_tools(
                         company_name,
                     ],
                     [
-                        "company_type",
+                        "is_company",
                         "=",
-                        "company",
+                        True,
                     ],
                 ],
                 fields=[
                     "id",
                     "name",
                     "display_name",
-                    "company_type",
                     "is_company",
                     "active",
                 ],
@@ -1003,7 +960,6 @@ def register_contacts_tools(
                     model="res.partner",
                     values={
                         "name": company_name,
-                        "company_type": "company",
                         "is_company": True,
                     },
                 )
@@ -1022,8 +978,7 @@ def register_contacts_tools(
                         "id",
                         "name",
                         "display_name",
-                        "company_type",
-                        "is_company",
+                            "is_company",
                         "active",
                     ],
                 )
@@ -1053,17 +1008,16 @@ def register_contacts_tools(
                             company_id,
                         ],
                         [
-                            "company_type",
+                            "is_company",
                             "=",
-                            "person",
+                            False,
                         ],
                     ],
                     fields=[
                         "id",
                         "name",
                         "display_name",
-                        "company_type",
-                        "type",
+                            "type",
                         "parent_id",
                         "active",
                     ],
@@ -1080,7 +1034,6 @@ def register_contacts_tools(
                     model="res.partner",
                     values={
                         "name": contact_name,
-                        "company_type": "person",
                         "is_company": False,
                         "type": "contact",
                         "parent_id": company_id,
@@ -1099,8 +1052,7 @@ def register_contacts_tools(
                         "id",
                         "name",
                         "display_name",
-                        "company_type",
-                        "type",
+                            "type",
                         "parent_id",
                         "active",
                     ],
