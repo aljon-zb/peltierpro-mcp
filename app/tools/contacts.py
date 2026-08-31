@@ -178,7 +178,7 @@ def register_contacts_tools(
                     ),
                 ]
 
-            records = odoo.search_read(
+            records = await odoo.search_read(
                 model="res.partner",
                 domain=domain,
                 fields=[
@@ -258,7 +258,7 @@ def register_contacts_tools(
                 contact_id
             )
 
-            records = odoo.search_read(
+            records = await odoo.search_read(
                 model="res.partner",
                 domain=[
                     (
@@ -414,7 +414,7 @@ def register_contacts_tools(
                     ),
                 ]
 
-            records = odoo.search_read(
+            records = await odoo.search_read(
                 model="res.partner",
                 domain=domain,
                 fields=[
@@ -539,7 +539,7 @@ def register_contacts_tools(
                     ),
                 ]
 
-            records = odoo.search_read(
+            records = await odoo.search_read(
                 model="res.partner",
                 domain=domain,
                 fields=[
@@ -628,7 +628,7 @@ def register_contacts_tools(
             # from OdooClient.
             #
 
-            active_contacts = odoo.search_read(
+            active_contacts = await odoo.search_read(
                 model="res.partner",
                 domain=[
                     (
@@ -718,7 +718,7 @@ def register_contacts_tools(
                 )
             )
 
-            recent_contacts = odoo.search_read(
+            recent_contacts = await odoo.search_read(
                 model="res.partner",
                 domain=[
                     (
@@ -813,7 +813,7 @@ def register_contacts_tools(
                 settings.max_results,
             )
 
-            company = odoo.search_read(
+            company = await odoo.search_read(
                 model="res.partner",
                 domain=[
                     (
@@ -860,7 +860,7 @@ def register_contacts_tools(
                     )
                 )
 
-            contacts = odoo.search_read(
+            contacts = await odoo.search_read(
                 model="res.partner",
                 domain=domain,
                 fields=[
@@ -900,3 +900,255 @@ def register_contacts_tools(
                 exc,
                 params,
             )
+
+    # -----------------------------------------------------------------------
+    # Create company with person contacts
+    # -----------------------------------------------------------------------
+
+    @mcp.tool()
+    async def create_company_contacts(
+        company_name: str,
+        contact_names: list[str],
+    ):
+        """
+        Create a company contact if it does not already exist, then create
+        person contacts under that company.
+
+        Existing company/person contacts are reused instead of duplicated.
+
+        Example:
+        - Create company "MCP Test" if it does not exist, then create:
+          Test MCP User 1
+          Test MCP User 2
+          Test MCP User 3
+          Test MCP User 4
+          Test MCP User 5
+
+        Provider: Zen Business Solutions
+        """
+
+        tool = "create_company_contacts"
+
+        params = {
+            "company_name": company_name,
+            "contact_names": contact_names,
+        }
+
+        try:
+            company_name = clean_search(company_name)
+
+            if not company_name:
+                raise ValueError(
+                    "company_name is required."
+                )
+
+            if not contact_names:
+                raise ValueError(
+                    "At least one contact name is required."
+                )
+
+            if len(contact_names) > settings.max_results:
+                raise ValueError(
+                    f"Too many contacts. Maximum allowed is {settings.max_results}."
+                )
+
+            cleaned_contact_names = []
+
+            for index, contact_name in enumerate(
+                contact_names,
+                start=1,
+            ):
+                cleaned_name = clean_search(contact_name)
+
+                if not cleaned_name:
+                    raise ValueError(
+                        f"contact_names[{index}] cannot be empty."
+                    )
+
+                if cleaned_name not in cleaned_contact_names:
+                    cleaned_contact_names.append(cleaned_name)
+
+            companies = await odoo.search_read(
+                model="res.partner",
+                domain=[
+                    [
+                        "name",
+                        "=",
+                        company_name,
+                    ],
+                    [
+                        "company_type",
+                        "=",
+                        "company",
+                    ],
+                ],
+                fields=[
+                    "id",
+                    "name",
+                    "display_name",
+                    "company_type",
+                    "is_company",
+                    "active",
+                ],
+                limit=1,
+            )
+
+            company_created = False
+
+            if companies:
+                company = companies[0]
+                company_id = company["id"]
+            else:
+                company_id = await odoo.create(
+                    model="res.partner",
+                    values={
+                        "name": company_name,
+                        "company_type": "company",
+                        "is_company": True,
+                    },
+                )
+
+                positive_id(
+                    company_id,
+                    "created_company_id",
+                )
+
+                company_created = True
+
+                company_records = await odoo.read(
+                    model="res.partner",
+                    record_ids=[company_id],
+                    fields=[
+                        "id",
+                        "name",
+                        "display_name",
+                        "company_type",
+                        "is_company",
+                        "active",
+                    ],
+                )
+
+                if not company_records:
+                    raise ValueError(
+                        "Company was created but could not be read back."
+                    )
+
+                company = company_records[0]
+
+            created_contacts = []
+            existing_contacts = []
+
+            for contact_name in cleaned_contact_names:
+                existing = await odoo.search_read(
+                    model="res.partner",
+                    domain=[
+                        [
+                            "name",
+                            "=",
+                            contact_name,
+                        ],
+                        [
+                            "parent_id",
+                            "=",
+                            company_id,
+                        ],
+                        [
+                            "company_type",
+                            "=",
+                            "person",
+                        ],
+                    ],
+                    fields=[
+                        "id",
+                        "name",
+                        "display_name",
+                        "company_type",
+                        "type",
+                        "parent_id",
+                        "active",
+                    ],
+                    limit=1,
+                )
+
+                if existing:
+                    existing_contacts.append(
+                        existing[0]
+                    )
+                    continue
+
+                contact_id = await odoo.create(
+                    model="res.partner",
+                    values={
+                        "name": contact_name,
+                        "company_type": "person",
+                        "is_company": False,
+                        "type": "contact",
+                        "parent_id": company_id,
+                    },
+                )
+
+                positive_id(
+                    contact_id,
+                    "created_contact_id",
+                )
+
+                contact_records = await odoo.read(
+                    model="res.partner",
+                    record_ids=[contact_id],
+                    fields=[
+                        "id",
+                        "name",
+                        "display_name",
+                        "company_type",
+                        "type",
+                        "parent_id",
+                        "active",
+                    ],
+                )
+
+                if not contact_records:
+                    raise ValueError(
+                        f'Contact "{contact_name}" was created '
+                        "but could not be read back."
+                    )
+
+                created_contacts.append(
+                    contact_records[0]
+                )
+
+            log_tool(
+                tool,
+                params,
+                success=True,
+            )
+
+            return branded_response(
+                {
+                    "success": True,
+                    "company_created": company_created,
+                    "company": company,
+                    "requested_contact_count": len(
+                        cleaned_contact_names
+                    ),
+                    "created_contact_count": len(
+                        created_contacts
+                    ),
+                    "existing_contact_count": len(
+                        existing_contacts
+                    ),
+                    "created_contacts": created_contacts,
+                    "existing_contacts": existing_contacts,
+                    "message": (
+                        "Company and person contacts processed successfully. "
+                        "Existing matching records were not duplicated."
+                    ),
+                }
+            )
+
+        except Exception as exc:
+            return failed(
+                tool,
+                exc,
+                params,
+            )
+
