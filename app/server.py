@@ -157,7 +157,7 @@ async def home(request):
             "service": "ZenBiz PeltierPro Odoo MCP",
             "provider": "Zen Business Solutions",
             "client": "Peltier Pro",
-            "access": "read-only",
+            "access": "read-write-controlled",
             "mcp_endpoint": "/mcp",
             "health_endpoint": "/health",
             "icon": ZENBIZ_ICON_URL,
@@ -206,7 +206,7 @@ async def health(request):
             "service": "ZenBiz PeltierPro Odoo MCP",
             "provider": "Zen Business Solutions",
             "client": "Peltier Pro",
-            "access": "read-only",
+            "access": "read-write-controlled",
             "oauth_enabled": settings.auth_enabled,
             "transport": settings.transport,
             "icon": ZENBIZ_ICON_URL,
@@ -304,6 +304,13 @@ register_accounting_tools(
 )
 
 register_inventory_tools(
+    mcp,
+    odoo,
+    settings,
+    failed,
+)
+
+register_contacts_tools(
     mcp,
     odoo,
     settings,

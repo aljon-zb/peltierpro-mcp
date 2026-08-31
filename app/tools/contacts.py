@@ -16,7 +16,7 @@ def register_contacts_tools(
     failed: Callable,
 ):
     """
-    Register read-only Odoo Contacts tools.
+    Register Odoo Contacts tools.
 
     Model:
         res.partner
