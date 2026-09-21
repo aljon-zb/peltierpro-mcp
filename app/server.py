@@ -90,6 +90,8 @@ mcp_kwargs: dict[str, Any] = {
     "transport_security": TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=[
+            "peltierpro-mcp-production-7521.up.railway.app",
+            "peltierpro-mcp-production-7521.up.railway.app:*",
             "peltierpro-mcp-production.up.railway.app",
             "peltierpro-mcp-production.up.railway.app:*",
             "localhost",
@@ -98,8 +100,8 @@ mcp_kwargs: dict[str, Any] = {
             "127.0.0.1:*",
         ],
         allowed_origins=[
-            "https://peltierpro-mcp-production.up.railway.app",
-            "https://peltierpro-mcp-production.up.railway.app:*",
+            "https://peltierpro-mcp-production-7521.up.railway.app",
+            "https://peltierpro-mcp-production-7521.up.railway.app/:*",
             "http://localhost:*",
             "http://127.0.0.1:*",
         ],
@@ -134,7 +136,7 @@ if settings.auth_enabled:
 mcp = FastMCP(
     "ZenBiz PeltierPro Odoo MCP",
     instructions=SERVER_INSTRUCTIONS,
-    website_url="https://peltierpro-mcp-production.up.railway.app",
+    website_url="https://peltierpro-mcp-production-7521.up.railway.app/mcp",
     icons=[ZENBIZ_ICON],
     **mcp_kwargs,
 )
