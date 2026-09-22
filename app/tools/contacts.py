@@ -1175,7 +1175,7 @@ def register_contacts_tools(
             ],
             fields=[
                 "id", "name", "display_name", "is_company", "email",
-                "phone", "mobile", "website", "street", "street2",
+                "phone", "mobile_no", "website", "street", "street2",
                 "city", "state_id", "zip", "country_id", "active",
             ],
             limit=10,
@@ -1197,7 +1197,7 @@ def register_contacts_tools(
             ],
             fields=[
                 "id", "name", "display_name", "is_company", "email",
-                "phone", "mobile", "website", "street", "street2",
+                "phone", "mobile_no", "website", "street", "street2",
                 "city", "state_id", "zip", "country_id", "active",
             ],
             limit=10,
@@ -1289,7 +1289,7 @@ def register_contacts_tools(
                 ],
                 fields=[
                     "id", "name", "display_name", "email", "phone",
-                    "mobile", "function", "parent_id", "is_company", "active",
+                    "mobile_no", "function", "parent_id", "is_company", "active",
                 ],
                 limit=1,
             )
@@ -1305,7 +1305,7 @@ def register_contacts_tools(
             ],
             fields=[
                 "id", "name", "display_name", "email", "phone",
-                "mobile", "function", "parent_id", "is_company", "active",
+                "mobile_no", "function", "parent_id", "is_company", "active",
             ],
             limit=1,
         )
@@ -1403,7 +1403,7 @@ def register_contacts_tools(
         - There is no company_name field.
         - Company = name + is_company=True.
         - Person = name + is_company=False.
-        - mobile_no is the Claude/MCP input key; it maps to Odoo mobile.
+        - mobile_no is the Claude/MCP input key; it maps directly to Odoo res.partner.mobile_no.
         - This tool never creates records.
         - Explicit confirmation is required before create_business_card_contacts.
         - No CRM lead/opportunity is created.
@@ -1588,7 +1588,7 @@ def register_contacts_tools(
         - Company uses name + is_company=True.
         - Person uses name + is_company=False.
         - Person is linked to company through parent_id.
-        - mobile_no maps to Odoo's standard mobile field.
+        - mobile_no maps directly to Odoo's res.partner.mobile_no field.
         - If company.name is missing, search/infer company using person email domain.
         - Existing companies/people are reused.
         - No crm.lead or opportunity is created.
@@ -1743,7 +1743,7 @@ def register_contacts_tools(
                         if company_phone:
                             company_values["phone"] = company_phone
                         if company_mobile_no:
-                            company_values["mobile"] = company_mobile_no
+                            company_values["mobile_no"] = company_mobile_no
                         if company_street:
                             company_values["street"] = company_street
                         if company_street2:
@@ -1767,7 +1767,7 @@ def register_contacts_tools(
                             record_ids=[company_id],
                             fields=[
                                 "id", "name", "display_name", "is_company", "website",
-                                "phone", "mobile", "street", "street2", "city",
+                                "phone", "mobile_no", "street", "street2", "city",
                                 "state_id", "zip", "country_id", "category_id", "active",
                             ],
                         )
@@ -1828,7 +1828,7 @@ def register_contacts_tools(
                 if phone:
                     person_values["phone"] = phone
                 if mobile_no:
-                    person_values["mobile"] = mobile_no
+                    person_values["mobile_no"] = mobile_no
                 if website:
                     person_values["website"] = website
                 if street:
@@ -1854,7 +1854,7 @@ def register_contacts_tools(
                     record_ids=[contact_id],
                     fields=[
                         "id", "name", "display_name", "is_company", "type",
-                        "parent_id", "email", "phone", "mobile", "website",
+                        "parent_id", "email", "phone", "mobile_no", "website",
                         "street", "street2", "city", "state_id", "zip",
                         "country_id", "function", "category_id", "active",
                     ],
