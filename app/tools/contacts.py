@@ -1336,6 +1336,110 @@ def register_contacts_tools(
             raise ValueError("Record-source tag was created but could not be read back.")
         return tags[0]
 
+    async def _attach_record_source_to_partner(
+        partner_id: int,
+        source_tag_id: int,
+        record_source: str,
+    ) -> dict[str, Any]:
+        """
+        Persist the business-card record source on an existing res.partner.
+
+        The source is stored in two places:
+        1. Contact Tags through category_id.
+        2. Notes/comment as "Record Source: <value>".
+
+        This is used for existing/reused companies and existing person contacts,
+        because those records are not created again during the import.
+
+        Existing tags are preserved. Existing Notes content is preserved.
+        """
+        partner_id = positive_id(
+            partner_id,
+            "partner_id",
+        )
+        source_tag_id = positive_id(
+            source_tag_id,
+            "source_tag_id",
+        )
+        record_source = _card_text(
+            record_source
+        )
+
+        if not record_source:
+            raise ValueError(
+                "record_source is required."
+            )
+
+        records = await odoo.read(
+            model="res.partner",
+            record_ids=[partner_id],
+            fields=[
+                "id",
+                "name",
+                "category_id",
+                "comment",
+            ],
+        )
+
+        if not records:
+            raise ValueError(
+                f"Partner ID {partner_id} was not found while saving record source."
+            )
+
+        partner = records[0]
+        existing_comment = _card_text(
+            partner.get("comment")
+        )
+
+        source_note = (
+            "<p><strong>Record Source:</strong> "
+            f"{escape(record_source)}</p>"
+        )
+
+        values: dict[str, Any] = {
+            # (4, id) adds one tag without replacing any existing tags.
+            "category_id": [
+                [
+                    4,
+                    source_tag_id,
+                ]
+            ],
+        }
+
+        # Avoid adding the exact same record source note repeatedly.
+        if record_source.casefold() not in existing_comment.casefold():
+            values["comment"] = (
+                existing_comment
+                + source_note
+                if existing_comment
+                else source_note
+            )
+
+        await odoo.execute(
+            "res.partner",
+            "write",
+            [partner_id],
+            vals=values,
+        )
+
+        updated = await odoo.read(
+            model="res.partner",
+            record_ids=[partner_id],
+            fields=[
+                "id",
+                "name",
+                "category_id",
+                "comment",
+            ],
+        )
+
+        if not updated:
+            raise ValueError(
+                f"Partner ID {partner_id} was updated but could not be read back."
+            )
+
+        return updated[0]
+
     async def _resolve_country_id(country_name: str) -> int | None:
         if not country_name:
             return None
@@ -1657,6 +1761,8 @@ def register_contacts_tools(
         - mobile_no maps directly to Odoo's res.partner.mobile_no field.
         - If company.name is missing, search/infer company using person email domain.
         - Existing companies/people are reused.
+        - Record source is persisted for BOTH newly created and existing/reused
+          partners as a Contact Tag ("Source: <record_source>") and in Notes.
         - Created and existing company/person results include direct Odoo Contacts URLs.
         - No crm.lead or opportunity is created.
         """
@@ -1773,12 +1879,23 @@ def register_contacts_tools(
                 if company_record is None:
                     if companies:
                         company_record = companies[0]
+
+                        company_source_record = await _attach_record_source_to_partner(
+                            partner_id=company_record["id"],
+                            source_tag_id=source_tag_id,
+                            record_source=record_source,
+                        )
+
                         reused_companies.append({
                             "card_index": index,
+                            "record_source": record_source,
+                            "source_tag": source_tag,
                             "name_source": name_source,
                             "email_domain": email_domain,
                             "company": {
                                 **company_record,
+                                "category_id": company_source_record.get("category_id"),
+                                "comment": company_source_record.get("comment"),
                                 "url": _odoo_contact_url(
                                     company_record.get("id")
                                 ),
@@ -1803,7 +1920,7 @@ def register_contacts_tools(
                             "name": resolved_name,
                             "is_company": True,
                             "type": "contact",
-                            "category_id": [[6, 0, [source_tag_id]]],
+                            "category_id": [[4, source_tag_id]],
                             "comment": (
                                 "<p><strong>Record Source:</strong> "
                                 f"{escape(record_source)}</p>"
@@ -1851,6 +1968,8 @@ def register_contacts_tools(
                         company_was_created = True
                         created_companies.append({
                             "card_index": index,
+                            "record_source": record_source,
+                            "source_tag": source_tag,
                             "name_source": name_source,
                             "email_domain": email_domain,
                             "company": {
@@ -1870,9 +1989,16 @@ def register_contacts_tools(
                     email=email,
                 )
                 if existing_person:
+                    existing_person_source_record = await _attach_record_source_to_partner(
+                        partner_id=existing_person["id"],
+                        source_tag_id=source_tag_id,
+                        record_source=record_source,
+                    )
+
                     existing_contacts.append({
                         "card_index": index,
                         "record_source": record_source,
+                        "source_tag": source_tag,
                         "company": {
                             "id": company_id,
                             "name": company_record.get("name"),
@@ -1881,11 +2007,16 @@ def register_contacts_tools(
                         },
                         "contact": {
                             **existing_person,
+                            "category_id": existing_person_source_record.get("category_id"),
+                            "comment": existing_person_source_record.get("comment"),
                             "url": _odoo_contact_url(
                                 existing_person.get("id")
                             ),
                         },
-                        "reason": "Matching person contact already exists.",
+                        "reason": (
+                            "Matching person contact already exists. "
+                            "Record source was added to the existing contact."
+                        ),
                     })
                     continue
 
@@ -1897,7 +2028,7 @@ def register_contacts_tools(
                     "is_company": False,
                     "type": "contact",
                     "parent_id": company_id,
-                    "category_id": [[6, 0, [source_tag_id]]],
+                    "category_id": [[4, source_tag_id]],
                     "comment": (
                         "<p><strong>Record Source:</strong> "
                         f"{escape(record_source)}</p>"
@@ -1950,6 +2081,7 @@ def register_contacts_tools(
                 created_contacts.append({
                     "card_index": index,
                     "record_source": record_source,
+                    "source_tag": source_tag,
                     "company_created": company_was_created,
                     "company": {
                         "id": company_id,
@@ -1965,6 +2097,8 @@ def register_contacts_tools(
                 })
 
             summary = {
+                "record_source": record_source,
+                "source_tag": source_tag,
                 "cards_processed": len(cards),
                 "new_person_contacts": [
                     {
@@ -2042,11 +2176,12 @@ def register_contacts_tools(
                 "odoo_base_url": _odoo_base_url() or None,
                 "summary": summary,
                 "message": (
-                    "Business-card import completed as Odoo Contacts. Companies use "
-                    "name + is_company=True; people use name + is_company=False and "
-                    "are linked through parent_id. Direct Odoo Contact URLs are "
-                    "included for created and existing records. No CRM opportunity "
-                    "was created."
+                    "Business-card import completed as Odoo Contacts. The record "
+                    "source was saved as a Contact Tag and in Notes for newly created "
+                    "records and existing/reused records. Companies use name + "
+                    "is_company=True; people use name + is_company=False and are "
+                    "linked through parent_id. Direct Odoo Contact URLs are included "
+                    "for created and existing records. No CRM opportunity was created."
                 ),
             })
         except Exception as exc:
