@@ -1364,6 +1364,62 @@ def register_contacts_tools(
         )
         return states[0]["id"] if states else None
 
+    def _odoo_base_url() -> str:
+        """
+        Resolve the configured Odoo base URL without assuming one exact
+        Settings/OdooClient attribute name.
+        """
+        candidates = [
+            getattr(settings, "odoo_url", None),
+            getattr(settings, "ODOO_URL", None),
+            getattr(odoo, "base_url", None),
+            getattr(odoo, "odoo_url", None),
+            getattr(odoo, "url", None),
+        ]
+
+        for candidate in candidates:
+            value = _card_text(candidate)
+
+            if not value:
+                continue
+
+            value = value.rstrip("/")
+
+            # Be defensive in case a JSON-2 endpoint was configured instead
+            # of the root Odoo URL.
+            for suffix in (
+                "/json/2",
+                "/json",
+            ):
+                if value.endswith(suffix):
+                    value = value[:-len(suffix)].rstrip("/")
+
+            return value
+
+        return ""
+
+    def _odoo_contact_url(
+        partner_id: int | None,
+    ) -> str | None:
+        """
+        Build a direct Odoo Contacts URL for a res.partner record.
+
+        Companies and people are both res.partner records, so they use the
+        same Contacts route.
+        """
+        if not partner_id:
+            return None
+
+        base_url = _odoo_base_url()
+
+        if not base_url:
+            return None
+
+        return (
+            f"{base_url}/odoo/contacts/"
+            f"{positive_id(partner_id, 'partner_id')}"
+        )
+
     @mcp.tool()
     async def preview_business_card_contacts(
         record_source: str,
@@ -1530,11 +1586,21 @@ def register_contacts_tools(
                             "name": company_record.get("name"),
                             "is_company": True,
                             "name_source": name_source,
+                            "url": _odoo_contact_url(company_id),
                         },
                         "email_domain": email_domain,
                         "company_exists": True,
                         "person_exists": bool(existing_person),
-                        "existing_person": existing_person,
+                        "existing_person": (
+                            {
+                                **existing_person,
+                                "url": _odoo_contact_url(
+                                    existing_person.get("id")
+                                ),
+                            }
+                            if existing_person
+                            else None
+                        ),
                     })
                 else:
                     preview.append({
@@ -1591,6 +1657,7 @@ def register_contacts_tools(
         - mobile_no maps directly to Odoo's res.partner.mobile_no field.
         - If company.name is missing, search/infer company using person email domain.
         - Existing companies/people are reused.
+        - Created and existing company/person results include direct Odoo Contacts URLs.
         - No crm.lead or opportunity is created.
         """
         tool = "create_business_card_contacts"
@@ -1710,7 +1777,12 @@ def register_contacts_tools(
                             "card_index": index,
                             "name_source": name_source,
                             "email_domain": email_domain,
-                            "company": company_record,
+                            "company": {
+                                **company_record,
+                                "url": _odoo_contact_url(
+                                    company_record.get("id")
+                                ),
+                            },
                         })
                     else:
                         company_input = company if isinstance(company, dict) else {}
@@ -1781,7 +1853,12 @@ def register_contacts_tools(
                             "card_index": index,
                             "name_source": name_source,
                             "email_domain": email_domain,
-                            "company": company_record,
+                            "company": {
+                                **company_record,
+                                "url": _odoo_contact_url(
+                                    company_record.get("id")
+                                ),
+                            },
                         })
 
                     company_cache[cache_key] = company_record
@@ -1800,8 +1877,14 @@ def register_contacts_tools(
                             "id": company_id,
                             "name": company_record.get("name"),
                             "is_company": True,
+                            "url": _odoo_contact_url(company_id),
                         },
-                        "contact": existing_person,
+                        "contact": {
+                            **existing_person,
+                            "url": _odoo_contact_url(
+                                existing_person.get("id")
+                            ),
+                        },
                         "reason": "Matching person contact already exists.",
                     })
                     continue
@@ -1873,9 +1956,72 @@ def register_contacts_tools(
                         "name": company_record.get("name"),
                         "is_company": True,
                         "name_source": name_source,
+                        "url": _odoo_contact_url(company_id),
                     },
-                    "contact": contact_records[0],
+                    "contact": {
+                        **contact_records[0],
+                        "url": _odoo_contact_url(contact_id),
+                    },
                 })
+
+            summary = {
+                "cards_processed": len(cards),
+                "new_person_contacts": [
+                    {
+                        "id": item["contact"].get("id"),
+                        "name": item["contact"].get("name"),
+                        "url": item["contact"].get("url"),
+                        "company_id": item["company"].get("id"),
+                        "company_name": item["company"].get("name"),
+                        "company_url": item["company"].get("url"),
+                    }
+                    for item in created_contacts
+                ],
+                "new_company_contacts": [
+                    {
+                        "id": item["company"].get("id"),
+                        "name": item["company"].get("name"),
+                        "url": item["company"].get("url"),
+                    }
+                    for item in created_companies
+                ],
+                "existing_person_contacts": [
+                    {
+                        "id": item["contact"].get("id"),
+                        "name": item["contact"].get("name"),
+                        "url": item["contact"].get("url"),
+                        "company_id": item["company"].get("id"),
+                        "company_name": item["company"].get("name"),
+                        "company_url": item["company"].get("url"),
+                    }
+                    for item in existing_contacts
+                ],
+                "reused_company_contacts": [
+                    {
+                        "id": item["company"].get("id"),
+                        "name": item["company"].get("name"),
+                        "url": item["company"].get("url"),
+                    }
+                    for item in reused_companies
+                ],
+                "skipped_contacts": skipped_contacts,
+            }
+
+            summary["new_person_contact_count"] = len(
+                summary["new_person_contacts"]
+            )
+            summary["new_company_contact_count"] = len(
+                summary["new_company_contacts"]
+            )
+            summary["existing_person_contact_count"] = len(
+                summary["existing_person_contacts"]
+            )
+            summary["reused_company_contact_count"] = len(
+                summary["reused_company_contacts"]
+            )
+            summary["skipped_contact_count"] = len(
+                summary["skipped_contacts"]
+            )
 
             log_tool(tool, params, success=True)
             return branded_response({
@@ -1893,10 +2039,14 @@ def register_contacts_tools(
                 "created_contacts": created_contacts,
                 "existing_contacts": existing_contacts,
                 "skipped_contacts": skipped_contacts,
+                "odoo_base_url": _odoo_base_url() or None,
+                "summary": summary,
                 "message": (
                     "Business-card import completed as Odoo Contacts. Companies use "
                     "name + is_company=True; people use name + is_company=False and "
-                    "are linked through parent_id. No CRM opportunity was created."
+                    "are linked through parent_id. Direct Odoo Contact URLs are "
+                    "included for created and existing records. No CRM opportunity "
+                    "was created."
                 ),
             })
         except Exception as exc:
