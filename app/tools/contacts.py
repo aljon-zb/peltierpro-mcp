@@ -1124,8 +1124,12 @@ def register_contacts_tools(
         IMPORTANT:
         The MCP tool does not receive or inspect image pixels. Claude must inspect
         the uploaded scan before calling this tool and include scan_quality for
-        every detected card. Missing/uncertain scan quality is treated as unsafe
-        for import so a partial card is never silently written to Odoo.
+        every detected card.
+
+        Cropping by itself does NOT make a card non-importable. A cropped card may
+        still be imported when all data required by the existing import workflow
+        is readable. The preview/create tools decide final importability after
+        validating the extracted person/company information.
         """
         raw_quality = raw_card.get("scan_quality")
 
@@ -1138,9 +1142,11 @@ def register_contacts_tools(
                 "confidence": "unknown",
                 "warning": (
                     "Scan quality was not supplied. Claude must inspect the uploaded "
-                    "image and confirm whether this business card is fully visible."
+                    "image and confirm whether this business card is fully visible "
+                    "or cropped."
                 ),
                 "requires_rescan": True,
+                "crop_warning_only": False,
             }
 
         is_cropped = raw_quality.get("is_cropped")
@@ -1181,30 +1187,40 @@ def register_contacts_tools(
 
         if is_cropped is True or is_fully_visible is False:
             status = "cropped"
-            requires_rescan = True
+
+            # IMPORTANT:
+            # A crop is now only a warning. It is NOT an automatic rescan/block.
+            # The preview/create tools determine whether required import data is
+            # actually missing after they inspect the extracted card fields.
+            requires_rescan = False
+            crop_warning_only = True
+
             if not warning:
                 sides_text = ", ".join(crop_sides)
                 warning = (
-                    f"Business card appears cropped on: {sides_text}. "
-                    "Some contact information may be outside the scanned image."
+                    f"Business card has cropped areas on: {sides_text}. "
+                    "The card may still be imported if all required data is readable."
                     if sides_text
                     else (
-                        "Business card appears partially outside the scanned image. "
-                        "Some contact information may be missing."
+                        "Business card has cropped areas. The card may still be "
+                        "imported if all required data is readable."
                     )
                 )
+
         elif is_cropped is False and is_fully_visible is True:
             status = "complete"
             requires_rescan = False
+            crop_warning_only = False
             if not warning:
                 warning = ""
         else:
             status = "unknown"
             requires_rescan = True
+            crop_warning_only = False
             if not warning:
                 warning = (
-                    "Claude could not confirm that the whole business card is visible. "
-                    "Review or rescan the card before importing it."
+                    "Claude could not confirm whether the business card is complete "
+                    "or cropped. Review the scan before importing it."
                 )
 
         return {
@@ -1215,6 +1231,7 @@ def register_contacts_tools(
             "confidence": confidence,
             "warning": warning or None,
             "requires_rescan": requires_rescan,
+            "crop_warning_only": crop_warning_only,
         }
 
     def _email_domain(email: str) -> str:
@@ -1687,10 +1704,12 @@ def register_contacts_tools(
         In that case, the person's email domain is used to search/infer company.
 
         IMPORTANT:
-        - scan_quality is required for safe import.
-        - A cropped card receives status=cropped_card and requires_rescan=true.
+        - scan_quality is required so Claude can report scan/crop conditions.
+        - Cropping alone does not block import.
+        - A cropped card is importable when the existing required import data is
+          readable: person name plus a resolvable company.
+        - A cropped card that is missing required import data requires rescanning.
         - Unknown/missing scan quality receives status=scan_quality_unknown.
-        - Cropped or scan-quality-unknown cards must not be imported.
         - There is no company_name field.
         - Company = name + is_company=True.
         - Person = name + is_company=False.
@@ -1765,13 +1784,23 @@ def register_contacts_tools(
                     continue
 
                 if not isinstance(person, dict):
+                    is_cropped = scan_quality["status"] == "cropped"
                     preview.append({
                         "index": index,
-                        "status": "invalid",
-                        "requires_rescan": False,
+                        "status": (
+                            "cropped_missing_required_data"
+                            if is_cropped
+                            else "invalid"
+                        ),
+                        "requires_rescan": is_cropped,
                         "can_import": False,
                         "scan_quality": scan_quality,
-                        "error": "Business card must contain a person object.",
+                        "error": (
+                            "The card has cropped areas and the required person "
+                            "information could not be read. Please rescan this card."
+                            if is_cropped
+                            else "Business card must contain a person object."
+                        ),
                     })
                     continue
 
@@ -1779,13 +1808,24 @@ def register_contacts_tools(
                 email = _card_text(person.get("email"))
                 mobile_no = _card_text(person.get("mobile_no"))
                 if not person_name:
+                    is_cropped = scan_quality["status"] == "cropped"
                     preview.append({
                         "index": index,
-                        "status": "invalid",
-                        "requires_rescan": False,
+                        "status": (
+                            "cropped_missing_required_data"
+                            if is_cropped
+                            else "invalid"
+                        ),
+                        "requires_rescan": is_cropped,
                         "can_import": False,
                         "scan_quality": scan_quality,
-                        "error": "Business card has no readable person name.",
+                        "error": (
+                            "The card has cropped areas and the person's name is not "
+                            "readable. The missing required data prevents import; "
+                            "please rescan this card."
+                            if is_cropped
+                            else "Business card has no readable person name."
+                        ),
                     })
                     continue
 
@@ -1796,10 +1836,15 @@ def register_contacts_tools(
                 email_domain = resolution.get("email_domain")
 
                 if resolution.get("status") == "missing":
+                    is_cropped = scan_quality["status"] == "cropped"
                     preview.append({
                         "index": index,
-                        "status": "needs_company",
-                        "requires_rescan": False,
+                        "status": (
+                            "cropped_missing_required_data"
+                            if is_cropped
+                            else "needs_company"
+                        ),
+                        "requires_rescan": is_cropped,
                         "can_import": False,
                         "scan_quality": scan_quality,
                         "person": {
@@ -1811,8 +1856,14 @@ def register_contacts_tools(
                         "company": None,
                         "email_domain": email_domain,
                         "error": (
-                            "No company name is visible and the email could not safely "
-                            "identify a company. Ask the user for the company before import."
+                            "The card has cropped areas and no company name or usable "
+                            "company email domain could be read. Required import data "
+                            "is missing, so please rescan this card."
+                            if is_cropped
+                            else (
+                                "No company name is visible and the email could not safely "
+                                "identify a company. Ask the user for the company before import."
+                            )
                         ),
                     })
                     continue
@@ -1860,7 +1911,17 @@ def register_contacts_tools(
                         ),
                         "requires_rescan": False,
                         "can_import": True,
+                        "cropped_but_usable": (
+                            scan_quality["status"] == "cropped"
+                        ),
                         "scan_quality": scan_quality,
+                        "notice": (
+                            f"Card #{index} has cropped areas, but the required "
+                            "information for import is already readable. This card "
+                            "is still okay to upload after confirmation."
+                            if scan_quality["status"] == "cropped"
+                            else None
+                        ),
                         "person": {
                             "name": person_name,
                             "is_company": False,
@@ -1894,7 +1955,17 @@ def register_contacts_tools(
                         "status": "ready_new_company",
                         "requires_rescan": False,
                         "can_import": True,
+                        "cropped_but_usable": (
+                            scan_quality["status"] == "cropped"
+                        ),
                         "scan_quality": scan_quality,
+                        "notice": (
+                            f"Card #{index} has cropped areas, but the required "
+                            "information for import is already readable. This card "
+                            "is still okay to upload after confirmation."
+                            if scan_quality["status"] == "cropped"
+                            else None
+                        ),
                         "person": {
                             "name": person_name,
                             "is_company": False,
@@ -1911,9 +1982,13 @@ def register_contacts_tools(
                         "person_exists": False,
                     })
 
-            cropped_card_count = sum(
+            cropped_but_usable_count = sum(
                 1 for item in preview
-                if item.get("status") == "cropped_card"
+                if item.get("cropped_but_usable") is True
+            )
+            cropped_missing_required_data_count = sum(
+                1 for item in preview
+                if item.get("status") == "cropped_missing_required_data"
             )
             scan_quality_unknown_count = sum(
                 1 for item in preview
@@ -1933,7 +2008,10 @@ def register_contacts_tools(
                 "success": True,
                 "record_source": record_source,
                 "count": len(preview),
-                "cropped_card_count": cropped_card_count,
+                "cropped_but_usable_count": cropped_but_usable_count,
+                "cropped_missing_required_data_count": (
+                    cropped_missing_required_data_count
+                ),
                 "scan_quality_unknown_count": scan_quality_unknown_count,
                 "requires_rescan_count": requires_rescan_count,
                 "importable_card_count": importable_card_count,
@@ -1943,10 +2021,17 @@ def register_contacts_tools(
                 "message": (
                     "Preview completed. No Odoo records were created. "
                     + (
-                        f"{requires_rescan_count} card(s) require review/rescanning and "
-                        "will be blocked from import. "
+                        f"{cropped_but_usable_count} card(s) have cropped areas, but "
+                        "the required information for import is already readable; "
+                        "they remain importable after confirmation. "
+                        if cropped_but_usable_count
+                        else ""
+                    )
+                    + (
+                        f"{requires_rescan_count} card(s) still require review/rescanning "
+                        "because required data or scan-quality confirmation is missing. "
                         if requires_rescan_count
-                        else "All cards have confirmed complete scan visibility. "
+                        else ""
                     )
                     + (
                         "Obtain explicit user confirmation before calling "
@@ -1969,8 +2054,11 @@ def register_contacts_tools(
         HARD RULES:
         - user_confirmed must be True or nothing is created.
         - Claude must provide scan_quality for every detected business card.
-        - Cropped cards are always skipped and require rescanning.
-        - Cards with missing/uncertain scan quality are also skipped.
+        - Cropping alone does not block creation.
+        - A cropped card may be imported when the person name and company can be
+          resolved from the visible extracted data.
+        - A cropped card is skipped only when required import data is missing.
+        - Cards with missing/uncertain scan quality are still skipped for review.
         - There is no company_name field.
         - Company uses name + is_company=True.
         - Person uses name + is_company=False.
@@ -2020,6 +2108,7 @@ def register_contacts_tools(
             existing_contacts = []
             skipped_contacts = []
             cropped_cards = []
+            cropped_but_usable_cards = []
             scan_quality_unknown_cards = []
             company_cache: dict[str, dict[str, Any]] = {}
 
@@ -2072,11 +2161,27 @@ def register_contacts_tools(
                     continue
 
                 if not isinstance(person, dict):
-                    skipped_contacts.append({
+                    is_cropped = scan_quality["status"] == "cropped"
+                    skipped_item = {
                         "index": index,
+                        "status": (
+                            "cropped_missing_required_data"
+                            if is_cropped
+                            else "invalid"
+                        ),
+                        "requires_rescan": is_cropped,
                         "scan_quality": scan_quality,
-                        "reason": "Business card must contain a person object.",
-                    })
+                        "reason": (
+                            "The card has cropped areas and the required person "
+                            "information could not be read. Contact was not created; "
+                            "please rescan this card."
+                            if is_cropped
+                            else "Business card must contain a person object."
+                        ),
+                    }
+                    skipped_contacts.append(skipped_item)
+                    if is_cropped:
+                        cropped_cards.append(skipped_item)
                     continue
 
                 person_name = _card_text(person.get("name"))
@@ -2093,10 +2198,26 @@ def register_contacts_tools(
                 country = _card_text(person.get("country"))
 
                 if not person_name:
-                    skipped_contacts.append({
+                    is_cropped = scan_quality["status"] == "cropped"
+                    skipped_item = {
                         "index": index,
-                        "reason": "Business card has no readable person name.",
-                    })
+                        "status": (
+                            "cropped_missing_required_data"
+                            if is_cropped
+                            else "invalid"
+                        ),
+                        "requires_rescan": is_cropped,
+                        "scan_quality": scan_quality,
+                        "reason": (
+                            "The card has cropped areas and the person's name is not "
+                            "readable. Contact was not created; please rescan this card."
+                            if is_cropped
+                            else "Business card has no readable person name."
+                        ),
+                    }
+                    skipped_contacts.append(skipped_item)
+                    if is_cropped:
+                        cropped_cards.append(skipped_item)
                     continue
 
                 resolution = await _resolve_company_for_business_card(company, email)
@@ -2106,16 +2227,34 @@ def register_contacts_tools(
                 email_domain = resolution.get("email_domain")
 
                 if resolution.get("status") == "missing":
-                    skipped_contacts.append({
+                    is_cropped = scan_quality["status"] == "cropped"
+                    skipped_item = {
                         "index": index,
+                        "status": (
+                            "cropped_missing_required_data"
+                            if is_cropped
+                            else "needs_company"
+                        ),
+                        "requires_rescan": is_cropped,
+                        "scan_quality": scan_quality,
                         "person": {"name": person_name, "is_company": False},
                         "email": email or None,
                         "email_domain": email_domain,
                         "reason": (
-                            "No company name is visible and the email could not safely "
-                            "identify a company. Contact was not created."
+                            "The card has cropped areas and no company name or usable "
+                            "company email domain could be read. Required import data "
+                            "is missing, so the contact was not created; please rescan "
+                            "this card."
+                            if is_cropped
+                            else (
+                                "No company name is visible and the email could not safely "
+                                "identify a company. Contact was not created."
+                            )
                         ),
-                    })
+                    }
+                    skipped_contacts.append(skipped_item)
+                    if is_cropped:
+                        cropped_cards.append(skipped_item)
                     continue
 
                 if resolution.get("status") == "ambiguous":
@@ -2129,6 +2268,32 @@ def register_contacts_tools(
                         ),
                     })
                     continue
+
+                if scan_quality["status"] == "cropped":
+                    cropped_but_usable_cards.append({
+                        "index": index,
+                        "status": "cropped_but_usable",
+                        "can_import": True,
+                        "requires_rescan": False,
+                        "scan_quality": scan_quality,
+                        "person": {
+                            "name": person_name,
+                            "email": email or None,
+                            "phone": phone or None,
+                            "mobile_no": mobile_no or None,
+                        },
+                        "company": {
+                            "name": resolved_name,
+                            "is_company": True,
+                            "name_source": name_source,
+                        },
+                        "notice": (
+                            f"Card #{index} has cropped areas, but the required "
+                            "information for import is already readable. The card "
+                            "is acceptable for upload and will be processed because "
+                            "the user already confirmed the import."
+                        ),
+                    })
 
                 cache_key = resolved_name.casefold()
                 company_record = company_cache.get(cache_key)
@@ -2398,6 +2563,7 @@ def register_contacts_tools(
                 ],
                 "skipped_contacts": skipped_contacts,
                 "cropped_cards": cropped_cards,
+                "cropped_but_usable_cards": cropped_but_usable_cards,
                 "scan_quality_unknown_cards": scan_quality_unknown_cards,
             }
 
@@ -2419,6 +2585,9 @@ def register_contacts_tools(
             summary["cropped_card_count"] = len(
                 summary["cropped_cards"]
             )
+            summary["cropped_but_usable_count"] = len(
+                summary["cropped_but_usable_cards"]
+            )
             summary["scan_quality_unknown_count"] = len(
                 summary["scan_quality_unknown_cards"]
             )
@@ -2435,6 +2604,7 @@ def register_contacts_tools(
                 "existing_contact_count": len(existing_contacts),
                 "skipped_contact_count": len(skipped_contacts),
                 "cropped_card_count": len(cropped_cards),
+                "cropped_but_usable_count": len(cropped_but_usable_cards),
                 "scan_quality_unknown_count": len(scan_quality_unknown_cards),
                 "created_companies": created_companies,
                 "reused_companies": reused_companies,
@@ -2442,6 +2612,7 @@ def register_contacts_tools(
                 "existing_contacts": existing_contacts,
                 "skipped_contacts": skipped_contacts,
                 "cropped_cards": cropped_cards,
+                "cropped_but_usable_cards": cropped_but_usable_cards,
                 "scan_quality_unknown_cards": scan_quality_unknown_cards,
                 "odoo_base_url": _odoo_base_url() or None,
                 "summary": summary,
@@ -2451,9 +2622,10 @@ def register_contacts_tools(
                     "records and existing/reused records. Companies use name + "
                     "is_company=True; people use name + is_company=False and are "
                     "linked through parent_id. Direct Odoo Contact URLs are included "
-                    "for created and existing records. Cropped cards and cards with "
-                    "unconfirmed scan quality were skipped and require review/rescanning. "
-                    "No CRM opportunity was created."
+                    "for created and existing records. Cropped cards were allowed when "
+                    "the required import data was already readable; cropped cards with "
+                    "missing required data and cards with unconfirmed scan quality were "
+                    "skipped for review/rescanning. No CRM opportunity was created."
                 ),
             })
         except Exception as exc:
