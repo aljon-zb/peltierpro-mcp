@@ -90,18 +90,16 @@ mcp_kwargs: dict[str, Any] = {
     "transport_security": TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=[
-            "peltierpro-mcp-production-7521.up.railway.app",
-            "peltierpro-mcp-production-7521.up.railway.app:*",
-            "peltierpro-mcp-production.up.railway.app",
-            "peltierpro-mcp-production.up.railway.app:*",
+            "mcp-peltier-staging.up.railway.app",
+            "mcp-peltier-staging.up.railway.app:*",
             "localhost",
             "localhost:*",
             "127.0.0.1",
             "127.0.0.1:*",
         ],
         allowed_origins=[
-            "https://peltierpro-mcp-production-7521.up.railway.app",
-            "https://peltierpro-mcp-production-7521.up.railway.app/:*",
+            "https://mcp-peltier-staging.up.railway.app",
+            "https://mcp-peltier-staging.up.railway.app/:*",
             "http://localhost:*",
             "http://127.0.0.1:*",
         ],
