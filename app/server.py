@@ -1,6 +1,8 @@
 import logging
+import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP, Icon
 from mcp.server.auth.settings import AuthSettings
@@ -37,11 +39,33 @@ logging.basicConfig(
 
 
 # ---------------------------------------------------------------------------
+# Public MCP URL
+# ---------------------------------------------------------------------------
+
+MCP_PUBLIC_URL = os.getenv(
+    "MCP_PUBLIC_URL",
+    "http://localhost:8000",
+).rstrip("/")
+
+parsed_mcp_url = urlparse(MCP_PUBLIC_URL)
+
+MCP_PUBLIC_HOST = (
+    parsed_mcp_url.hostname
+    or "localhost"
+)
+
+MCP_PUBLIC_ORIGIN = (
+    f"{parsed_mcp_url.scheme}://"
+    f"{parsed_mcp_url.netloc}"
+)
+
+
+# ---------------------------------------------------------------------------
 # MCP icon
 # ---------------------------------------------------------------------------
 
 ZENBIZ_ICON_URL = (
-    "https://peltierpro-mcp-production.up.railway.app"
+    f"{MCP_PUBLIC_URL}"
     "/assets/zenbiz-icon.png"
 )
 
@@ -90,16 +114,16 @@ mcp_kwargs: dict[str, Any] = {
     "transport_security": TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=[
-            "mcp-peltier-staging.up.railway.app",
-            "mcp-peltier-staging.up.railway.app:*",
+            MCP_PUBLIC_HOST,
+            f"{MCP_PUBLIC_HOST}:*",
             "localhost",
             "localhost:*",
             "127.0.0.1",
             "127.0.0.1:*",
         ],
         allowed_origins=[
-            "https://mcp-peltier-staging.up.railway.app",
-            "https://mcp-peltier-staging.up.railway.app/:*",
+            MCP_PUBLIC_ORIGIN,
+            f"{MCP_PUBLIC_ORIGIN}:*",
             "http://localhost:*",
             "http://127.0.0.1:*",
         ],
@@ -134,7 +158,7 @@ if settings.auth_enabled:
 mcp = FastMCP(
     "ZenBiz PeltierPro Odoo MCP",
     instructions=SERVER_INSTRUCTIONS,
-    website_url="https://peltierpro-mcp-production-7521.up.railway.app/mcp",
+    website_url=f"{MCP_PUBLIC_URL}/mcp",
     icons=[ZENBIZ_ICON],
     **mcp_kwargs,
 )
