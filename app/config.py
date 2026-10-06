@@ -20,6 +20,13 @@ def _csv(name: str, default: str = "") -> list[str]:
     ]
 
 
+def _bool(name: str, default: str = "false") -> bool:
+    return (
+        os.getenv(name, default).strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+
+
 @dataclass(frozen=True)
 class Settings:
     odoo_url: str
@@ -40,6 +47,9 @@ class Settings:
     auth_audience: str | None
     auth_required_scopes: list[str]
     auth_algorithms: list[str]
+
+    permissions_enabled: bool
+    permissions_file: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -66,10 +76,7 @@ class Settings:
         if not 1 <= max_results <= 200:
             raise ConfigurationError("MAX_RESULTS must be between 1 and 200.")
 
-        auth_enabled = (
-            os.getenv("AUTH_ENABLED", "false").strip().lower()
-            in {"1", "true", "yes", "on"}
-        )
+        auth_enabled = _bool("AUTH_ENABLED")
 
         issuer = os.getenv("AUTH_ISSUER_URL", "").strip() or None
         resource = os.getenv("AUTH_RESOURCE_SERVER_URL", "").strip() or None
@@ -100,6 +107,23 @@ class Settings:
                     "AUTH_RESOURCE_SERVER_URL must use HTTPS."
                 )
 
+        permissions_enabled = _bool("PERMISSIONS_ENABLED")
+        permissions_file = os.getenv(
+            "PERMISSIONS_FILE",
+            "config/permissions.yaml",
+        ).strip()
+
+        if permissions_enabled and not auth_enabled:
+            raise ConfigurationError(
+                "PERMISSIONS_ENABLED=true requires AUTH_ENABLED=true so the "
+                "server can identify the caller securely."
+            )
+
+        if permissions_enabled and not permissions_file:
+            raise ConfigurationError(
+                "PERMISSIONS_FILE cannot be blank when permissions are enabled."
+            )
+
         return cls(
             odoo_url=os.environ["ODOO_URL"].rstrip("/"),
             odoo_database=os.environ["ODOO_DATABASE"].strip(),
@@ -117,4 +141,6 @@ class Settings:
             auth_audience=audience,
             auth_required_scopes=scopes,
             auth_algorithms=algorithms,
+            permissions_enabled=permissions_enabled,
+            permissions_file=permissions_file,
         )

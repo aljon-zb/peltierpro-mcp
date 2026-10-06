@@ -77,6 +77,19 @@ class JWKSJWTTokenVerifier(TokenVerifier):
             return None
 
         subject = claims.get("sub")
+
+        # Keep only identity/security claims that are useful to the MCP.
+        # Do not copy the entire JWT payload into the request context.
+        forwarded_claims = {
+            "iss": claims.get("iss"),
+            "sub": claims.get("sub"),
+            "aud": claims.get("aud"),
+            "email": claims.get("email"),
+            "preferred_username": claims.get("preferred_username"),
+            "username": claims.get("username"),
+            "name": claims.get("name"),
+        }
+
         return AccessToken(
             token=token,
             client_id=str(client_id),
@@ -84,11 +97,7 @@ class JWKSJWTTokenVerifier(TokenVerifier):
             expires_at=int(exp) if exp is not None else None,
             resource=self.audience,
             subject=str(subject) if subject is not None else None,
-            claims={
-                "iss": claims.get("iss"),
-                "sub": claims.get("sub"),
-                "aud": claims.get("aud"),
-            },
+            claims=forwarded_claims,
         )
 
     async def verify_token(self, token: str) -> AccessToken | None:

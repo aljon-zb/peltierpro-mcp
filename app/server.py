@@ -1,18 +1,20 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP, Icon
 from mcp.server.auth.settings import AuthSettings
+from mcp.types import ContentBlock
 from pydantic import AnyHttpUrl
 
-from app.audit import log_tool
+from app.audit import log_access_denied, log_tool
 from app.branding import branded_response
 from app.config import Settings
-from app.odoo_client import OdooAPIError, OdooClient
+from app.odoo_client import OdooClient
 from app.oauth import JWKSJWTTokenVerifier
+from app.permissions import PermissionDeniedError, PermissionManager
 from mcp.server.transport_security import TransportSecuritySettings
 from app.prompts import register_prompts
 from app.tools import (
@@ -105,6 +107,95 @@ as the provider/integrator of this MCP server.
 
 
 # ---------------------------------------------------------------------------
+# Configurable MCP permissions
+# ---------------------------------------------------------------------------
+
+permissions = PermissionManager(
+    enabled=settings.permissions_enabled,
+    config_file=settings.permissions_file,
+)
+
+
+class PermissionedFastMCP(FastMCP):
+    """
+    FastMCP with per-principal tool visibility and execution authorization.
+
+    This keeps authorization centralized. Existing app/tools/*.py files do not
+    need permission checks added one by one.
+    """
+
+    def __init__(self, *args, permission_manager: PermissionManager, **kwargs):
+        self.permission_manager = permission_manager
+        self._tool_modules: dict[str, str] = {}
+        super().__init__(*args, **kwargs)
+
+    def add_tool(
+        self,
+        fn,
+        name=None,
+        title=None,
+        description=None,
+        annotations=None,
+        icons=None,
+        meta=None,
+        structured_output=None,
+    ) -> None:
+        tool_name = name or fn.__name__
+        module_name = fn.__module__.rsplit(".", 1)[-1]
+        self._tool_modules[tool_name] = module_name
+
+        super().add_tool(
+            fn,
+            name=name,
+            title=title,
+            description=description,
+            annotations=annotations,
+            icons=icons,
+            meta=meta,
+            structured_output=structured_output,
+        )
+
+    async def list_tools(self):
+        tools = await super().list_tools()
+
+        if not self.permission_manager.enabled:
+            return tools
+
+        visible = []
+        for tool in tools:
+            module_name = self._tool_modules.get(tool.name, "unknown")
+            if self.permission_manager.is_allowed(
+                module=module_name,
+                tool_name=tool.name,
+            ):
+                visible.append(tool)
+
+        return visible
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> Sequence[ContentBlock] | dict[str, Any]:
+        module_name = self._tool_modules.get(name, "unknown")
+
+        try:
+            self.permission_manager.require(
+                module=module_name,
+                tool_name=name,
+            )
+        except PermissionDeniedError as exc:
+            log_access_denied(
+                module=module_name,
+                tool=name,
+                error=str(exc),
+            )
+            raise
+
+        return await super().call_tool(name, arguments)
+
+
+# ---------------------------------------------------------------------------
 # MCP configuration
 # ---------------------------------------------------------------------------
 
@@ -155,11 +246,12 @@ if settings.auth_enabled:
 # MCP server
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP(
+mcp = PermissionedFastMCP(
     "ZenBiz PeltierPro Odoo MCP",
     instructions=SERVER_INSTRUCTIONS,
     website_url=f"{MCP_PUBLIC_URL}/mcp",
     icons=[ZENBIZ_ICON],
+    permission_manager=permissions,
     **mcp_kwargs,
 )
 
@@ -198,7 +290,6 @@ async def home(request):
     methods=["GET"],
 )
 async def zenbiz_icon(request):
-    from pathlib import Path
     from starlette.responses import FileResponse
 
     icon_path = (
@@ -232,6 +323,7 @@ async def health(request):
             "client": "Peltier Pro",
             "access": "read-write-controlled",
             "oauth_enabled": settings.auth_enabled,
+            "permissions_enabled": settings.permissions_enabled,
             "transport": settings.transport,
             "icon": ZENBIZ_ICON_URL,
         }

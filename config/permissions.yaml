@@ -1,0 +1,61 @@
+# MCP tool permissions.
+#
+# IMPORTANT:
+# Each value under `identifiers` must match one of the authenticated JWT values:
+#   - sub
+#   - email
+#   - preferred_username / username
+#   - client_id
+#
+# Permission formats:
+#   "*"                                  all MCP tools
+#   "contacts.*"                         all tools from app/tools/contacts.py
+#   "crm.*"                              all CRM tools
+#   "sales.get_sales_order"              one exact module/tool
+#   "search_users"                       one exact tool name
+#
+# Unconfigured users receive only defaults.permissions.
+
+defaults:
+  permissions: []
+
+principals:
+  hanson:
+    label: Hanson
+    enabled: true
+    identifiers:
+      # Replace these examples with the real JWT identity value(s).
+      - hanson@example.com
+      - hanson
+    permissions:
+      - "*"
+
+  joe:
+    label: Joe
+    enabled: true
+    identifiers:
+      - joe@example.com
+      - joe
+    permissions:
+      - "contacts.*"
+      - "crm.*"
+
+  ryan:
+    label: Ryan
+    enabled: true
+    identifiers:
+      - ryan@example.com
+      - ryan
+    permissions:
+      - "*"
+
+  jan:
+    label: Jan
+    enabled: true
+    identifiers:
+      - jan@example.com
+      - jan
+    permissions:
+      - "contacts.*"
+      - "crm.*"
+      - "sales.*"
