@@ -45,7 +45,7 @@ principals:
     label: aljon
     enabled: true
     identifiers:
-      - aljon.garde1197@peltierpro.com
+      - aljon.garde1197@gmail.com
       - aljon
     permissions:
       - "contacts.*"
