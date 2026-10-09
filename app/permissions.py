@@ -34,19 +34,39 @@ class PermissionManager:
     """
     Config-driven MCP tool authorization.
 
-    Permission patterns use either:
-      - "*"                       -> every tool
-      - "contacts.*"              -> every Contacts tool
-      - "crm.get_crm_opportunity" -> one specific tool
-      - "search_users"            -> exact tool name
+    Permission patterns support:
 
-    The current identity is resolved from the authenticated MCP access token.
-    Matching may use sub, email, preferred_username, or client_id.
+      "*"                         -> every MCP tool
+      "contacts.*"                -> every Contacts tool
+      "crm.*"                     -> every CRM tool
+      "sales.get_sales_order"     -> one specific module/tool
+      "search_users"              -> one exact tool name
+
+    The current user is resolved from the authenticated MCP access token.
+
+    Supported identity values include:
+
+      - sub
+      - user_id
+      - email
+      - preferred_username
+      - username
+      - client_id
+
+    PropelAuth user information may also be nested inside:
+
+      claims["user"]
     """
 
-    def __init__(self, *, enabled: bool, config_file: str) -> None:
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        config_file: str,
+    ) -> None:
         self.enabled = enabled
         self.config_file = Path(config_file)
+
         self._principals: dict[str, dict[str, Any]] = {}
         self._identifier_index: dict[str, str] = {}
         self._default_permissions: list[str] = []
@@ -54,24 +74,52 @@ class PermissionManager:
         if self.enabled:
             self.reload()
 
+    # ------------------------------------------------------------------
+    # Configuration loading
+    # ------------------------------------------------------------------
+
     def reload(self) -> None:
         if not self.config_file.exists():
             raise PermissionConfigurationError(
                 f"Permission file not found: {self.config_file}"
             )
 
-        with self.config_file.open("r", encoding="utf-8") as handle:
+        with self.config_file.open(
+            "r",
+            encoding="utf-8",
+        ) as handle:
             raw = yaml.safe_load(handle) or {}
 
-        principals = raw.get("principals", {})
-        defaults = raw.get("defaults", {})
+        if not isinstance(raw, dict):
+            raise PermissionConfigurationError(
+                "permissions.yaml root must be a mapping."
+            )
+
+        principals = raw.get(
+            "principals",
+            {},
+        )
+
+        defaults = raw.get(
+            "defaults",
+            {},
+        )
 
         if not isinstance(principals, dict):
             raise PermissionConfigurationError(
                 "permissions.yaml: 'principals' must be a mapping."
             )
 
-        default_permissions = defaults.get("permissions", [])
+        if not isinstance(defaults, dict):
+            raise PermissionConfigurationError(
+                "permissions.yaml: 'defaults' must be a mapping."
+            )
+
+        default_permissions = defaults.get(
+            "permissions",
+            [],
+        )
+
         if not isinstance(default_permissions, list):
             raise PermissionConfigurationError(
                 "permissions.yaml: defaults.permissions must be a list."
@@ -85,28 +133,70 @@ class PermissionManager:
                     f"permissions.yaml: principal '{key}' must be a mapping."
                 )
 
-            identifiers = config.get("identifiers", [])
-            permissions = config.get("permissions", [])
+            identifiers = config.get(
+                "identifiers",
+                [],
+            )
+
+            permissions = config.get(
+                "permissions",
+                [],
+            )
 
             if not isinstance(identifiers, list):
                 raise PermissionConfigurationError(
-                    f"permissions.yaml: {key}.identifiers must be a list."
-                )
-            if not isinstance(permissions, list):
-                raise PermissionConfigurationError(
-                    f"permissions.yaml: {key}.permissions must be a list."
+                    f"permissions.yaml: "
+                    f"{key}.identifiers must be a list."
                 )
 
-            # The principal key itself is also a valid identifier.
-            all_identifiers = [str(key), *[str(item) for item in identifiers]]
+            if not isinstance(permissions, list):
+                raise PermissionConfigurationError(
+                    f"permissions.yaml: "
+                    f"{key}.permissions must be a list."
+                )
+
+            # Principal key itself may also be used as an identifier.
+            all_identifiers = [
+                str(key),
+                *[
+                    str(item)
+                    for item in identifiers
+                ],
+            ]
+
             for identifier in all_identifiers:
-                normalized = self._normalize_identifier(identifier)
-                if normalized:
-                    identifier_index[normalized] = str(key)
+                normalized = self._normalize_identifier(
+                    identifier
+                )
+
+                if not normalized:
+                    continue
+
+                existing = identifier_index.get(
+                    normalized
+                )
+
+                if (
+                    existing is not None
+                    and existing != str(key)
+                ):
+                    raise PermissionConfigurationError(
+                        "Duplicate permission identifier "
+                        f"'{identifier}' is assigned to both "
+                        f"'{existing}' and '{key}'."
+                    )
+
+                identifier_index[
+                    normalized
+                ] = str(key)
 
         self._principals = principals
         self._identifier_index = identifier_index
-        self._default_permissions = [str(item) for item in default_permissions]
+
+        self._default_permissions = [
+            str(item)
+            for item in default_permissions
+        ]
 
         logger.info(
             "Loaded MCP permissions from %s (%d principals)",
@@ -114,120 +204,348 @@ class PermissionManager:
             len(self._principals),
         )
 
-    @staticmethod
-    def _normalize_identifier(value: str | None) -> str:
-        return (value or "").strip().lower()
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def _token_claims(token: Any) -> dict[str, Any]:
-        claims = getattr(token, "claims", None)
-        return claims if isinstance(claims, dict) else {}
+    def _normalize_identifier(
+        value: str | None,
+    ) -> str:
+        return (
+            value or ""
+        ).strip().lower()
 
-    def current_principal(self) -> Principal | None:
+    @staticmethod
+    def _token_claims(
+        token: Any,
+    ) -> dict[str, Any]:
+        claims = getattr(
+            token,
+            "claims",
+            None,
+        )
+
+        if isinstance(
+            claims,
+            dict,
+        ):
+            return claims
+
+        return {}
+
+    @staticmethod
+    def _first_value(
+        *values: Any,
+    ) -> str | None:
+        for value in values:
+            if value is None:
+                continue
+
+            text = str(
+                value
+            ).strip()
+
+            if text:
+                return text
+
+        return None
+
+    # ------------------------------------------------------------------
+    # Current authenticated user
+    # ------------------------------------------------------------------
+
+    def current_principal(
+        self,
+    ) -> Principal | None:
         token = get_access_token()
+
         if token is None:
             return None
 
-        claims = self._token_claims(token)
-        subject = getattr(token, "subject", None) or claims.get("sub")
-        client_id = getattr(token, "client_id", None)
-        email = claims.get("email")
-        username = claims.get("preferred_username") or claims.get("username")
+        claims = self._token_claims(
+            token
+        )
 
-        candidates = [subject, email, username, client_id]
-        matched_key = None
+        # PropelAuth may provide user data either directly
+        # in the introspection response or inside "user".
+        user = claims.get(
+            "user",
+            {},
+        )
+
+        if not isinstance(
+            user,
+            dict,
+        ):
+            user = {}
+
+        subject = self._first_value(
+            getattr(
+                token,
+                "subject",
+                None,
+            ),
+            claims.get("sub"),
+            claims.get("user_id"),
+            user.get("user_id"),
+            user.get("id"),
+        )
+
+        client_id = self._first_value(
+            getattr(
+                token,
+                "client_id",
+                None,
+            ),
+            claims.get("client_id"),
+        )
+
+        email = self._first_value(
+            claims.get("email"),
+            user.get("email"),
+        )
+
+        username = self._first_value(
+            claims.get(
+                "preferred_username"
+            ),
+            claims.get(
+                "username"
+            ),
+            user.get(
+                "preferred_username"
+            ),
+            user.get(
+                "username"
+            ),
+        )
+
+        candidates = [
+            subject,
+            email,
+            username,
+            client_id,
+        ]
+
+        matched_key: str | None = None
 
         for candidate in candidates:
             normalized = self._normalize_identifier(
-                str(candidate) if candidate is not None else None
+                candidate
             )
-            if normalized and normalized in self._identifier_index:
-                matched_key = self._identifier_index[normalized]
+
+            if (
+                normalized
+                and normalized
+                in self._identifier_index
+            ):
+                matched_key = (
+                    self._identifier_index[
+                        normalized
+                    ]
+                )
                 break
 
+        # Authenticated, but not configured
         if matched_key is None:
-            # Keep a useful identity in logs even when not configured.
-            fallback = subject or email or username or client_id or "unknown"
-            return Principal(
-                key=str(fallback),
-                label=str(fallback),
-                client_id=str(client_id) if client_id is not None else None,
-                subject=str(subject) if subject is not None else None,
-                email=str(email) if email is not None else None,
-                username=str(username) if username is not None else None,
+            fallback = (
+                email
+                or username
+                or subject
+                or client_id
+                or "unknown"
             )
 
-        config = self._principals.get(matched_key, {})
-        return Principal(
-            key=matched_key,
-            label=str(config.get("label") or matched_key),
-            client_id=str(client_id) if client_id is not None else None,
-            subject=str(subject) if subject is not None else None,
-            email=str(email) if email is not None else None,
-            username=str(username) if username is not None else None,
+            return Principal(
+                key=fallback,
+                label=fallback,
+                client_id=client_id,
+                subject=subject,
+                email=email,
+                username=username,
+            )
+
+        config = self._principals.get(
+            matched_key,
+            {},
         )
 
-    def _permissions_for_current_principal(self) -> tuple[Principal | None, list[str], bool]:
+        return Principal(
+            key=matched_key,
+            label=str(
+                config.get("label")
+                or matched_key
+            ),
+            client_id=client_id,
+            subject=subject,
+            email=email,
+            username=username,
+        )
+
+    # ------------------------------------------------------------------
+    # Permission resolution
+    # ------------------------------------------------------------------
+
+    def _permissions_for_current_principal(
+        self,
+    ) -> tuple[
+        Principal | None,
+        list[str],
+        bool,
+    ]:
         principal = self.current_principal()
 
+        # No authenticated user.
         if principal is None:
-            return None, self._default_permissions, True
+            return (
+                None,
+                self._default_permissions,
+                True,
+            )
 
-        config = self._principals.get(principal.key)
+        config = self._principals.get(
+            principal.key
+        )
+
+        # Authenticated but not configured.
         if config is None:
-            return principal, self._default_permissions, True
+            return (
+                principal,
+                self._default_permissions,
+                True,
+            )
 
-        enabled = bool(config.get("enabled", True))
-        permissions = [str(item) for item in config.get("permissions", [])]
-        return principal, permissions, enabled
+        enabled = bool(
+            config.get(
+                "enabled",
+                True,
+            )
+        )
+
+        permissions = [
+            str(item)
+            for item in config.get(
+                "permissions",
+                [],
+            )
+        ]
+
+        return (
+            principal,
+            permissions,
+            enabled,
+        )
 
     @staticmethod
-    def permission_key(module: str, tool_name: str) -> str:
-        return f"{module}.{tool_name}"
+    def permission_key(
+        module: str,
+        tool_name: str,
+    ) -> str:
+        return (
+            f"{module}.{tool_name}"
+        )
 
-    def is_allowed(self, *, module: str, tool_name: str) -> bool:
-        # Local/dev behavior stays unchanged until permissions are explicitly enabled.
+    # ------------------------------------------------------------------
+    # Authorization
+    # ------------------------------------------------------------------
+
+    def is_allowed(
+        self,
+        *,
+        module: str,
+        tool_name: str,
+    ) -> bool:
+        # Development behavior:
+        # if permission filtering is disabled,
+        # every registered tool remains available.
         if not self.enabled:
             return True
 
-        _principal, permissions, principal_enabled = (
-            self._permissions_for_current_principal()
-        )
+        (
+            _principal,
+            permissions,
+            principal_enabled,
+        ) = self._permissions_for_current_principal()
+
         if not principal_enabled:
             return False
 
-        full_key = self.permission_key(module, tool_name)
+        full_key = self.permission_key(
+            module,
+            tool_name,
+        )
 
         for pattern in permissions:
-            pattern = pattern.strip()
+            pattern = (
+                pattern
+                .strip()
+            )
+
             if not pattern:
                 continue
 
-            # Supports "*", "contacts.*", exact full keys, and exact tool names.
-            if fnmatch.fnmatchcase(full_key, pattern):
+            # Examples:
+            #
+            # *
+            # contacts.*
+            # crm.*
+            # sales.get_sales_order
+            # search_users
+
+            if fnmatch.fnmatchcase(
+                full_key,
+                pattern,
+            ):
                 return True
-            if fnmatch.fnmatchcase(tool_name, pattern):
+
+            if fnmatch.fnmatchcase(
+                tool_name,
+                pattern,
+            ):
                 return True
 
         return False
 
-    def require(self, *, module: str, tool_name: str) -> None:
-        if self.is_allowed(module=module, tool_name=tool_name):
+    def require(
+        self,
+        *,
+        module: str,
+        tool_name: str,
+    ) -> None:
+        if self.is_allowed(
+            module=module,
+            tool_name=tool_name,
+        ):
             return
 
         principal = self.current_principal()
-        identity = principal.label if principal else "anonymous"
+
+        identity = (
+            principal.label
+            if principal
+            else "anonymous"
+        )
 
         raise PermissionDeniedError(
             f"MCP access denied for '{identity}': "
-            f"tool '{module}.{tool_name}' is not permitted."
+            f"tool '{module}.{tool_name}' "
+            "is not permitted."
         )
 
-    def identity_for_log(self) -> dict[str, Any]:
+    # ------------------------------------------------------------------
+    # Logging / debugging
+    # ------------------------------------------------------------------
+
+    def identity_for_log(
+        self,
+    ) -> dict[str, Any]:
         principal = self.current_principal()
+
         if principal is None:
             return {
                 "principal": None,
+                "principal_key": None,
                 "client_id": None,
                 "subject": None,
                 "email": None,
