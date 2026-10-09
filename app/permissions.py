@@ -70,8 +70,22 @@ class PermissionManager:
         if config_path.is_absolute():
             self.config_file = config_path
         else:
-            project_root = Path(__file__).resolve().parent.parent
-            self.config_file = project_root / config_path
+            app_dir = Path(__file__).resolve().parent
+            project_root = app_dir.parent
+
+            candidates = [
+                project_root / config_path,
+                app_dir / config_path,
+            ]
+
+            self.config_file = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if candidate.exists()
+                ),
+                candidates[0],
+            )
 
         self._principals: dict[str, dict[str, Any]] = {}
         self._identifier_index: dict[str, str] = {}
