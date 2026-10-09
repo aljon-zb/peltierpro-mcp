@@ -65,7 +65,13 @@ class PermissionManager:
         config_file: str,
     ) -> None:
         self.enabled = enabled
-        self.config_file = Path(config_file)
+        config_path = Path(config_file)
+
+        if config_path.is_absolute():
+            self.config_file = config_path
+        else:
+            project_root = Path(__file__).resolve().parent.parent
+            self.config_file = project_root / config_path
 
         self._principals: dict[str, dict[str, Any]] = {}
         self._identifier_index: dict[str, str] = {}
@@ -81,7 +87,8 @@ class PermissionManager:
     def reload(self) -> None:
         if not self.config_file.exists():
             raise PermissionConfigurationError(
-                f"Permission file not found: {self.config_file}"
+                "Permission file not found: "
+                f"{self.config_file.resolve()}"
             )
 
         with self.config_file.open(
