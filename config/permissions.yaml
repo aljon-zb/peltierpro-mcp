@@ -25,7 +25,7 @@ principals:
     enabled: true
     identifiers:
       # Replace these examples with the real JWT identity value(s).
-      - hanson@example.com
+      - hanson@peltierpro.com
       - hanson
     permissions:
       - "*"
@@ -34,7 +34,7 @@ principals:
     label: Joe
     enabled: true
     identifiers:
-      - joe@example.com
+      - jnagy@peltierpro.com
       - joe
     permissions:
       - "contacts.*"
