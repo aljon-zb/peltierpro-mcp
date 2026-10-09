@@ -40,22 +40,13 @@ principals:
       - "contacts.*"
       - "crm.*"
 
-  ryan:
-    label: Ryan
-    enabled: true
-    identifiers:
-      - ryan@example.com
-      - ryan
-    permissions:
-      - "*"
 
-  jan:
-    label: Jan
+  aljon:
+    label: aljon
     enabled: true
     identifiers:
-      - jan@example.com
-      - jan
+      - aljon.garde1197@peltierpro.com
+      - aljon
     permissions:
       - "contacts.*"
       - "crm.*"
-      - "sales.*"
