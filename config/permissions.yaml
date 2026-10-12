@@ -1,11 +1,12 @@
 # MCP tool permissions.
 #
 # IMPORTANT:
-# Each value under `identifiers` must match one of the authenticated JWT values:
-#   - sub
-#   - email
-#   - preferred_username / username
-#   - client_id
+# Each value under `identifiers` must match one of the authenticated Odoo-backed
+# OAuth identity values:
+#   - sub (formatted as odoo:<user_id>)
+#   - Odoo email
+#   - Odoo login / preferred_username
+#   - OAuth client_id
 #
 # Permission formats:
 #   "*"                                  all MCP tools
@@ -24,7 +25,7 @@ principals:
     label: Hanson
     enabled: true
     identifiers:
-      # Replace these examples with the real JWT identity value(s).
+      # Replace these examples with the real Odoo login/email value(s).
       - hanson@peltierpro.com
       - hanson
     permissions:

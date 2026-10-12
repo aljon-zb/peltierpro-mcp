@@ -1,18 +1,17 @@
 import logging
 import os
-import httpx
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlparse
 from mcp.server.fastmcp import FastMCP, Icon
-from mcp.server.auth.provider import AccessToken, TokenVerifier
-from mcp.server.auth.settings import AuthSettings
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
 from mcp.types import ContentBlock
 from pydantic import AnyHttpUrl
 from app.audit import log_access_denied, log_tool
 from app.branding import branded_response
 from app.config import Settings
-from app.odoo_client import OdooClient
+from app.odoo_client import OdooAPIError, OdooClient
+from app.odoo_oauth import OdooOAuthProvider
 from app.permissions import PermissionDeniedError, PermissionManager
 from mcp.server.transport_security import TransportSecuritySettings
 from app.prompts import register_prompts
@@ -51,93 +50,13 @@ MCP_PUBLIC_ORIGIN = (
     f"{parsed_mcp_url.netloc}"
 )
 # ---------------------------------------------------------------------------
-# PropelAuth OAuth / remote authorization
+# OAuth / MCP resource URLs
 # ---------------------------------------------------------------------------
-PROPELAUTH_AUTH_URL = os.getenv(
-    "PROPELAUTH_AUTH_URL",
-    "",
-).rstrip("/")
-PROPELAUTH_INTROSPECTION_CLIENT_ID = os.getenv(
-    "PROPELAUTH_INTROSPECTION_CLIENT_ID",
-    "",
-)
-PROPELAUTH_INTROSPECTION_CLIENT_SECRET = os.getenv(
-    "PROPELAUTH_INTROSPECTION_CLIENT_SECRET",
-    "",
-)
 MCP_RESOURCE_URL = os.getenv(
     "AUTH_RESOURCE_SERVER_URL",
     f"{MCP_PUBLIC_URL}/mcp",
 ).rstrip("/")
-class PropelAuthIntrospectionTokenVerifier(TokenVerifier):
-    """Validate MCP bearer tokens through PropelAuth token introspection."""
-    def __init__(
-        self,
-        *,
-        auth_url: str,
-        client_id: str,
-        client_secret: str,
-        required_scopes: list[str],
-        timeout_seconds: float = 30.0,
-    ):
-        self.introspection_url = f"{auth_url}/oauth/2.1/introspect"
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.required_scopes = set(required_scopes or [])
-        self.timeout_seconds = timeout_seconds
-    async def verify_token(self, token: str) -> AccessToken | None:
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                response = await client.post(
-                    self.introspection_url,
-                    data={"token": token},
-                    auth=(self.client_id, self.client_secret),
-                    headers={"Accept": "application/json"},
-                )
-            if response.status_code != 200:
-                logging.warning(
-                    "PropelAuth introspection returned HTTP %s",
-                    response.status_code,
-                )
-                return None
-            payload = response.json()
-            if not payload.get("active"):
-                return None
-            scopes = str(payload.get("scope") or "").split()
-            missing_scopes = self.required_scopes - set(scopes)
-            if missing_scopes:
-                logging.warning(
-                    "PropelAuth token is missing required scope(s): %s",
-                    sorted(missing_scopes),
-                )
-                return None
-            expires_at = payload.get("exp")
-            if expires_at is not None:
-                try:
-                    expires_at = int(expires_at)
-                except (TypeError, ValueError):
-                    expires_at = None
-            subject = payload.get("sub")
-            if subject is not None:
-                subject = str(subject)
-            return AccessToken(
-                token=token,
-                client_id=str(
-                    payload.get("client_id")
-                    or "propelauth-mcp-client"
-                ),
-                scopes=scopes,
-                expires_at=expires_at,
-                resource=MCP_RESOURCE_URL,
-                subject=subject,
-                claims=payload,
-            )
-        except (httpx.HTTPError, ValueError) as exc:
-            logging.warning(
-                "PropelAuth token introspection failed: %s",
-                exc,
-            )
-            return None
+
 # ---------------------------------------------------------------------------
 # MCP icon
 # ---------------------------------------------------------------------------
@@ -276,6 +195,28 @@ class PermissionedFastMCP(FastMCP):
             raise
         return await super().call_tool(name, arguments)
 # ---------------------------------------------------------------------------
+# Odoo client
+# ---------------------------------------------------------------------------
+odoo = OdooClient(
+    base_url=settings.odoo_url,
+    database=settings.odoo_database,
+    api_key=settings.odoo_api_key,
+    timeout_seconds=settings.request_timeout_seconds,
+)
+
+# ---------------------------------------------------------------------------
+# Odoo-backed OAuth provider
+# ---------------------------------------------------------------------------
+oauth_provider = OdooOAuthProvider(
+    issuer_url=MCP_PUBLIC_URL,
+    resource_server_url=MCP_RESOURCE_URL,
+    default_scopes=settings.auth_required_scopes,
+    authorization_code_ttl_seconds=settings.auth_code_ttl_seconds,
+    access_token_ttl_seconds=settings.auth_access_token_ttl_seconds,
+    refresh_token_ttl_seconds=settings.auth_refresh_token_ttl_seconds,
+)
+
+# ---------------------------------------------------------------------------
 # MCP configuration
 # ---------------------------------------------------------------------------
 mcp_kwargs: dict[str, Any] = {
@@ -300,35 +241,17 @@ mcp_kwargs: dict[str, Any] = {
     ),
 }
 if settings.auth_enabled:
-    missing_propelauth = [
-        name
-        for name, value in {
-            "PROPELAUTH_AUTH_URL": PROPELAUTH_AUTH_URL,
-            "PROPELAUTH_INTROSPECTION_CLIENT_ID": PROPELAUTH_INTROSPECTION_CLIENT_ID,
-            "PROPELAUTH_INTROSPECTION_CLIENT_SECRET": PROPELAUTH_INTROSPECTION_CLIENT_SECRET,
-        }.items()
-        if not value
-    ]
-    if missing_propelauth:
-        raise RuntimeError(
-            "OAuth is enabled but required PropelAuth environment variables are "
-            f"missing: {', '.join(missing_propelauth)}"
-        )
-    mcp_kwargs["token_verifier"] = PropelAuthIntrospectionTokenVerifier(
-        auth_url=PROPELAUTH_AUTH_URL,
-        client_id=PROPELAUTH_INTROSPECTION_CLIENT_ID,
-        client_secret=PROPELAUTH_INTROSPECTION_CLIENT_SECRET,
-        required_scopes=settings.auth_required_scopes,
-        timeout_seconds=settings.request_timeout_seconds,
-    )
+    mcp_kwargs["auth_server_provider"] = oauth_provider
     mcp_kwargs["auth"] = AuthSettings(
-        issuer_url=AnyHttpUrl(
-            f"{PROPELAUTH_AUTH_URL}/oauth/2.1"
-        ),
-        resource_server_url=AnyHttpUrl(
-            MCP_RESOURCE_URL
-        ),
+        issuer_url=AnyHttpUrl(MCP_PUBLIC_URL),
+        resource_server_url=AnyHttpUrl(MCP_RESOURCE_URL),
         required_scopes=settings.auth_required_scopes,
+        client_registration_options=ClientRegistrationOptions(
+            enabled=True,
+            valid_scopes=settings.auth_required_scopes,
+            default_scopes=settings.auth_required_scopes,
+        ),
+        validate_token_resource=True,
     )
 # ---------------------------------------------------------------------------
 # MCP server
@@ -381,6 +304,121 @@ async def zenbiz_icon(request):
         media_type="image/png",
     )
 # ---------------------------------------------------------------------------
+# Odoo-backed interactive OAuth login
+# ---------------------------------------------------------------------------
+def _odoo_login_page(request_id: str, error: str | None = None) -> str:
+    from html import escape
+
+    error_html = ""
+    if error:
+        error_html = (
+            '<div style="margin:0 0 18px;padding:12px 14px;border-radius:8px;'
+            'background:#fff1f0;color:#8a1f17;border:1px solid #ffccc7;">'
+            f"{escape(error)}"
+            "</div>"
+        )
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Authorize PeltierPro MCP</title>
+</head>
+<body style="margin:0;background:#f7f7f8;font-family:Arial,sans-serif;color:#222;">
+  <main style="max-width:420px;margin:64px auto;padding:0 18px;">
+    <section style="background:white;border:1px solid #e5e5e5;border-radius:12px;padding:28px;box-shadow:0 6px 24px rgba(0,0,0,.05);">
+      <h1 style="margin:0 0 8px;font-size:23px;">Sign in with Odoo</h1>
+      <p style="margin:0 0 22px;color:#666;line-height:1.45;">
+        Use your existing Odoo account to authorize Claude to access the PeltierPro MCP.
+        No separate MCP account will be created.
+      </p>
+      {error_html}
+      <form method="post" action="/odoo/login" autocomplete="on">
+        <input type="hidden" name="request_id" value="{escape(request_id)}">
+        <label style="display:block;margin-bottom:7px;font-weight:600;">Odoo login</label>
+        <input name="login" type="text" autocomplete="username" required
+               style="box-sizing:border-box;width:100%;padding:11px 12px;margin-bottom:16px;border:1px solid #ccc;border-radius:7px;">
+        <label style="display:block;margin-bottom:7px;font-weight:600;">Password</label>
+        <input name="password" type="password" autocomplete="current-password" required
+               style="box-sizing:border-box;width:100%;padding:11px 12px;margin-bottom:20px;border:1px solid #ccc;border-radius:7px;">
+        <button type="submit"
+                style="width:100%;padding:11px 14px;border:0;border-radius:7px;background:#714b67;color:white;font-weight:700;cursor:pointer;">
+          Continue with Odoo
+        </button>
+      </form>
+      <p style="font-size:12px;color:#777;line-height:1.45;margin:18px 0 0;">
+        Your password is sent to your configured Odoo server only for authentication and is not stored by this MCP service.
+      </p>
+    </section>
+  </main>
+</body>
+</html>"""
+
+
+@mcp.custom_route(
+    "/odoo/login",
+    methods=["GET", "POST"],
+)
+async def odoo_login(request):
+    from urllib.parse import parse_qs
+    from starlette.responses import HTMLResponse, RedirectResponse
+
+    if not settings.auth_enabled:
+        return HTMLResponse("OAuth is disabled.", status_code=404)
+
+    if request.method == "GET":
+        request_id = request.query_params.get("request_id", "")
+        if not request_id or oauth_provider.get_pending(request_id) is None:
+            return HTMLResponse(
+                "This authorization request is missing or has expired. Reconnect the MCP from Claude.",
+                status_code=400,
+            )
+        return HTMLResponse(_odoo_login_page(request_id))
+
+    raw_body = (await request.body()).decode("utf-8", errors="replace")
+    form = parse_qs(raw_body, keep_blank_values=True)
+    request_id = (form.get("request_id") or [""])[0]
+    login = (form.get("login") or [""])[0].strip()
+    password = (form.get("password") or [""])[0]
+
+    if not request_id or oauth_provider.get_pending(request_id) is None:
+        return HTMLResponse(
+            "This authorization request is missing or has expired. Reconnect the MCP from Claude.",
+            status_code=400,
+        )
+
+    if not login or not password:
+        return HTMLResponse(
+            _odoo_login_page(request_id, "Enter your Odoo login and password."),
+            status_code=400,
+        )
+
+    try:
+        identity = await odoo.authenticate_user(
+            login=login,
+            password=password,
+        )
+    except OdooAPIError:
+        logging.warning("Odoo MCP authorization login failed for submitted login.")
+        return HTMLResponse(
+            _odoo_login_page(request_id, "Odoo sign-in failed. Check your login and password."),
+            status_code=401,
+        )
+
+    redirect_to = oauth_provider.complete_odoo_login(
+        request_id=request_id,
+        identity=identity,
+    )
+    if not redirect_to:
+        return HTMLResponse(
+            "This authorization request has expired. Reconnect the MCP from Claude.",
+            status_code=400,
+        )
+
+    return RedirectResponse(redirect_to, status_code=302)
+
+# ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
 @mcp.custom_route(
@@ -397,20 +435,12 @@ async def health(request):
             "client": "Peltier Pro",
             "access": "read-write-controlled",
             "oauth_enabled": settings.auth_enabled,
+            "oauth_provider": "odoo" if settings.auth_enabled else None,
             "permissions_enabled": settings.permissions_enabled,
             "transport": settings.transport,
             "icon": ZENBIZ_ICON_URL,
         }
     )
-# ---------------------------------------------------------------------------
-# Odoo client
-# ---------------------------------------------------------------------------
-odoo = OdooClient(
-    base_url=settings.odoo_url,
-    database=settings.odoo_database,
-    api_key=settings.odoo_api_key,
-    timeout_seconds=settings.request_timeout_seconds,
-)
 # ---------------------------------------------------------------------------
 # Error helper
 # ---------------------------------------------------------------------------

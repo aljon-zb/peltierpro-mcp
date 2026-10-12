@@ -53,9 +53,10 @@ class PermissionManager:
       - username
       - client_id
 
-    PropelAuth user information may also be nested inside:
-
-      claims["user"]
+    For the built-in Odoo OAuth provider, the access token contains the Odoo
+    email/login plus a stable subject in the form ``odoo:<user_id>``. The
+    nested ``claims["user"]`` fallback is retained for backwards-compatible
+    token formats.
     """
 
     def __init__(
@@ -288,8 +289,7 @@ class PermissionManager:
             token
         )
 
-        # PropelAuth may provide user data either directly
-        # in the introspection response or inside "user".
+        # Keep support for token formats that nest identity data under "user".
         user = claims.get(
             "user",
             {},

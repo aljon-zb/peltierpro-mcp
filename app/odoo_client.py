@@ -78,6 +78,99 @@ class OdooClient:
                 "Odoo returned non-JSON content."
             ) from exc
 
+
+    async def authenticate_user(
+        self,
+        *,
+        login: str,
+        password: str,
+    ) -> dict[str, Any]:
+        """Authenticate an interactive user against Odoo.
+
+        Credentials are sent only to Odoo's standard web session endpoint and
+        are never stored by this client. The service API key is then used to
+        read the authenticated res.users record so the MCP token can carry a
+        stable Odoo identity.
+        """
+        url = f"{self.base_url}/web/session/authenticate"
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "call",
+            "params": {
+                "db": self.database,
+                "login": login,
+                "password": password,
+            },
+            "id": None,
+        }
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout_seconds,
+                follow_redirects=False,
+            ) as client:
+                response = await client.post(
+                    url,
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                        "User-Agent": "zenbiz-odoo-mcp-auth/1.0",
+                    },
+                    json=payload,
+                )
+        except httpx.TimeoutException as exc:
+            raise OdooAPIError("Odoo login request timed out.") from exc
+        except httpx.RequestError as exc:
+            raise OdooAPIError(f"Unable to reach Odoo login: {exc}") from exc
+
+        if response.status_code in {301, 302, 307, 308}:
+            raise OdooAPIError(
+                "Odoo redirected the login request. Verify ODOO_URL."
+            )
+
+        if response.is_error:
+            raise OdooAPIError(
+                f"Odoo login returned HTTP {response.status_code}."
+            )
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise OdooAPIError("Odoo login returned non-JSON content.") from exc
+
+        if payload.get("error"):
+            # Deliberately do not expose Odoo's detailed exception to the browser.
+            raise OdooAPIError("Invalid Odoo username or password.")
+
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise OdooAPIError("Invalid Odoo username or password.")
+
+        uid = result.get("uid")
+        if not isinstance(uid, int) or uid <= 0:
+            raise OdooAPIError("Invalid Odoo username or password.")
+
+        users = await self.search_read(
+            model="res.users",
+            domain=[["id", "=", uid]],
+            fields=["id", "name", "login", "email", "active"],
+            limit=1,
+        )
+        if not users:
+            raise OdooAPIError("Authenticated Odoo user could not be loaded.")
+
+        user = users[0]
+        if not user.get("active", False):
+            raise OdooAPIError("This Odoo user is inactive.")
+
+        return {
+            "id": user.get("id", uid),
+            "name": user.get("name") or result.get("name"),
+            "login": user.get("login") or login,
+            "email": user.get("email") or user.get("login") or login,
+            "active": True,
+        }
+
     async def search_read(
         self,
         *,
