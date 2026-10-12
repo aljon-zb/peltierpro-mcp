@@ -51,3 +51,12 @@ principals:
     permissions:
       - "contacts.*"
       - "crm.*"
+
+  peltiertech:
+    label: peltiertech
+    enabled: true
+    identifiers:
+      - peltiertech_acctg@zenaccountants.com
+      - peltiertech
+    permissions:
+      - "*"
